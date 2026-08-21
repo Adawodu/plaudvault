@@ -1,0 +1,33 @@
+[project]
+name = "plaudvault"
+version = "0.1.0"
+description = "Own your Plaud recordings: local archive, local transcription, local summaries, Obsidian notes."
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "av>=13.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "keyring>=25.0",
+    # Apple Silicon gets the GPU backend automatically; everyone else uses
+    # faster-whisper, which runs on CPU anywhere and CUDA where available.
+    "mlx-whisper>=0.4.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "faster-whisper>=1.0; sys_platform != 'darwin' or platform_machine != 'arm64'",
+]
+
+[project.optional-dependencies]
+# Force the portable backend on a Mac, e.g. to reproduce what Linux users see.
+portable = ["faster-whisper>=1.0"]
+
+[project.scripts]
+plaudctl = "plaudvault.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["plaudvault"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"plaudvault/static" = "plaudvault/static"

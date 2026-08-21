@@ -1,0 +1,1015 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plaud Console</title>
+<link rel="stylesheet" href="/static/tokens.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5}
+a{color:var(--gold);text-decoration:none}
+button{font:inherit;cursor:pointer}
+
+header{display:flex;align-items:baseline;gap:20px;padding:20px 28px;border-bottom:1px solid var(--rail);position:sticky;top:0;background:var(--background);z-index:10;flex-wrap:wrap}
+h1{font-family:var(--font-display);font-size:26px;font-weight:400;margin:0;letter-spacing:.01em}
+nav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+nav button{background:none;border:1px solid transparent;color:var(--muted-foreground);padding:6px 14px;border-radius:6px}
+nav button:hover{color:var(--foreground);background:var(--panel-2)}
+nav button.on{color:var(--gold);border-color:var(--rail-2);background:var(--panel)}
+#themeBtn{background:none;border:1px solid var(--rail);color:var(--muted-foreground);border-radius:6px;padding:6px 10px}
+
+main{padding:24px 28px 80px;max-width:1180px;margin:0 auto}
+.view{display:none}.view.on{display:block}
+
+.banner{background:var(--destructive-soft);color:var(--destructive);border:1px solid var(--destructive);padding:12px 16px;border-radius:8px;margin-bottom:20px}
+.muted{color:var(--muted-foreground)}
+.faint{color:var(--faint);font-size:12px}
+.mono{font-family:var(--font-mono)}
+.empty{padding:44px;text-align:center;color:var(--faint);border:1px dashed var(--rail);border-radius:10px}
+
+/* cards */
+.card{background:var(--panel);border:1px solid var(--rail);border-radius:10px;padding:16px 18px;margin-bottom:12px}
+.card h3{margin:0 0 4px;font-size:15px;font-weight:600}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.spread{justify-content:space-between}
+
+/* chips */
+.chip{display:inline-block;font-size:11px;padding:2px 9px;border-radius:20px;background:var(--panel-2);color:var(--muted-foreground);border:1px solid var(--rail);white-space:nowrap}
+.chip.gold{background:var(--gold-soft);color:var(--gold-foreground);border-color:var(--gold)}
+.chip.good{background:var(--success-soft);color:var(--success);border-color:var(--success)}
+.chip.warn{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
+.chip.bad{background:var(--destructive-soft);color:var(--destructive);border-color:var(--destructive)}
+
+/* buttons */
+.btn{background:var(--panel-2);border:1px solid var(--rail-2);color:var(--foreground);padding:6px 13px;border-radius:6px}
+.btn:hover{border-color:var(--gold)}
+.btn.primary{background:var(--gold-soft);border-color:var(--gold);color:var(--gold-foreground);font-weight:500}
+.btn.danger{color:var(--destructive);border-color:var(--destructive)}
+.btn.sm{padding:3px 9px;font-size:12px}
+
+input,select,textarea{font:inherit;background:var(--panel);border:1px solid var(--rail-2);color:var(--foreground);border-radius:6px;padding:6px 9px;width:100%}
+textarea{resize:vertical;min-height:60px}
+label{display:block;font-size:12px;color:var(--muted-foreground);margin-bottom:3px}
+.field{margin-bottom:10px}
+
+/* metrics */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin-bottom:22px}
+.tile{background:var(--panel);border:1px solid var(--rail);border-radius:10px;padding:14px 16px}
+.tile .n{font-family:var(--font-display);font-size:30px;line-height:1.1}
+.tile .k{font-size:11px;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.06em;margin-top:5px}
+.tile .sub{font-size:12px;color:var(--faint);margin-top:3px}
+h2{font-family:var(--font-display);font-weight:400;font-size:20px;margin:26px 0 12px}
+
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-foreground);padding:8px 10px;border-bottom:1px solid var(--rail)}
+td{padding:9px 10px;border-bottom:1px solid var(--rail);vertical-align:top}
+tbody tr:hover{background:var(--panel)}
+
+/* transcript */
+.transcript{max-height:460px;overflow:auto;background:var(--panel-2);border:1px solid var(--rail);border-radius:8px;padding:14px;font-family:var(--font-mono);font-size:12.5px;line-height:1.7;white-space:pre-wrap}
+.ts{color:var(--gold);cursor:pointer}
+.summary{background:var(--panel);border:1px solid var(--rail);border-radius:8px;padding:4px 18px}
+.summary h2{font-size:15px;font-family:var(--font-sans);font-weight:600;margin:16px 0 6px}
+.summary ul{margin:6px 0;padding-left:20px}
+
+.split{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.split{grid-template-columns:1fr}}
+
+dialog{border:1px solid var(--rail-2);border-radius:12px;background:var(--panel);color:var(--foreground);padding:22px;max-width:520px;width:92%}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+audio{width:100%;margin:10px 0}
+.tierbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+
+/* freshness pill — the header's answer to "is my vault current?" */
+#freshPill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--rail-2);
+  background:var(--panel);color:var(--foreground);border-radius:20px;padding:5px 13px;font-size:12.5px}
+#freshPill:hover{border-color:var(--gold)}
+#freshPill .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+#freshPill.ok .dot{background:var(--success)}
+#freshPill.behind .dot{background:var(--warn)}
+#freshPill.ok{border-color:var(--success)}
+#freshPill.behind{border-color:var(--warn)}
+
+/* chart */
+.filters{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px}
+.filters .f{min-width:130px}
+.filters label{margin-bottom:3px}
+.chartwrap{position:relative;overflow-x:auto}
+.chart{display:block;width:100%;min-width:560px;height:auto;overflow:visible}
+.chart .grid{stroke:var(--rail);stroke-width:1}
+.chart .zero{stroke:var(--rail-2);stroke-width:1}
+.chart .axis{fill:var(--muted-foreground);font-size:10.5px;font-family:var(--font-sans)}
+.chart .axis.num{font-variant-numeric:tabular-nums}
+.chart .mean{fill:none;stroke:var(--gold);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.chart .pt{stroke:var(--panel);stroke-width:2}
+.chart .hit{fill:transparent;cursor:pointer;outline:none}
+.chart .hit:focus-visible+.ptring,.chart .hit:hover+.ptring{opacity:1}
+.ptring{fill:none;stroke:var(--gold);stroke-width:2;opacity:0;pointer-events:none}
+.chart .crosshair{stroke:var(--rail-2);stroke-width:1;opacity:0}
+.chart .dlabel{fill:var(--muted-foreground);font-size:10.5px;font-family:var(--font-sans)}
+#tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .1s;background:var(--panel);
+  border:1px solid var(--rail-2);border-radius:8px;padding:9px 11px;font-size:12px;max-width:270px;
+  box-shadow:0 6px 20px rgba(0,0,0,.14);z-index:5}
+#tip b{display:block;margin-bottom:3px}
+.scalekey{display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted-foreground)}
+.scalekey .sw{display:flex;border-radius:4px;overflow:hidden;border:1px solid var(--rail)}
+.scalekey .sw i{width:26px;height:11px;display:block}
+.hollowkey{width:11px;height:11px;border-radius:50%;border:2px solid var(--pol-0);background:var(--panel);display:inline-block}
+</style>
+</head>
+<body>
+<header>
+  <h1>Plaud Console</h1>
+  <span class="faint mono" id="hdrStatus"></span>
+  <button id="freshPill" onclick="show('vault')" title="Vault status — what still needs processing">
+    <span class="dot"></span><span id="freshText">checking…</span>
+  </button>
+  <nav>
+    <button data-v="inbox" class="on">Inbox</button>
+    <button data-v="library">Library</button>
+    <button data-v="actions">Actions</button>
+    <button data-v="trends">Trends</button>
+    <button data-v="systems">Systems</button>
+    <button data-v="measures">Measures</button>
+    <button data-v="help">Help</button>
+    <button id="syncBtn" class="btn primary" style="margin-left:8px" onclick="startRun()">Sync now</button>
+    <button id="themeBtn">◐</button>
+  </nav>
+</header>
+
+<main>
+  <div id="banner"></div>
+  <div id="runBox"></div>
+
+  <section class="view on" id="v-inbox">
+    <p class="muted">Recordings that have been transcribed but not yet triaged. Decide what reaches the cognitive stack, and what can leave Plaud's cloud.</p>
+    <div id="inboxList"></div>
+  </section>
+
+  <section class="view" id="v-library">
+    <div class="row" style="margin-bottom:14px">
+      <input id="libSearch" placeholder="Search recordings…" style="max-width:300px">
+      <select id="libTier" style="max-width:170px">
+        <option value="">All tiers</option>
+        <option value="stack">In cognitive stack</option>
+        <option value="local">Local only</option>
+        <option value="exclude">Excluded</option>
+      </select>
+    </div>
+    <div id="libList"></div>
+  </section>
+
+  <section class="view" id="v-detail">
+    <button class="btn sm" onclick="show('inbox')">← back</button>
+    <div id="detail"></div>
+  </section>
+
+  <section class="view" id="v-actions">
+    <div class="row" style="margin-bottom:14px">
+      <select id="actFilter" style="max-width:190px">
+        <option value="">All open</option>
+        <option value="proposed">Proposed</option>
+        <option value="accepted">Accepted</option>
+        <option value="in_progress">In progress</option>
+        <option value="done">Done</option>
+        <option value="dropped">Dropped</option>
+      </select>
+    </div>
+    <div id="actList"></div>
+  </section>
+
+  <section class="view" id="v-trends">
+    <p class="muted">How the tone of what you record has moved over time. Every transcribed
+    recording is scored locally by the same model that writes your summaries.
+    <b>Click any point to open that recording.</b></p>
+    <div class="filters">
+      <div class="f"><label for="trRange">Range</label>
+        <select id="trRange">
+          <option value="90">Last 90 days</option>
+          <option value="180">Last 6 months</option>
+          <option value="365" selected>Last year</option>
+          <option value="">All time</option>
+        </select></div>
+      <div class="f"><label for="trBucket">Trend line</label>
+        <select id="trBucket">
+          <option value="day">Daily mean</option>
+          <option value="week" selected>Weekly mean</option>
+          <option value="month">Monthly mean</option>
+        </select></div>
+      <div class="f" style="min-width:auto">
+        <label style="display:flex;align-items:center;gap:6px;margin:0 0 6px">
+          <input type="checkbox" id="trLow" style="width:auto"> include low-confidence readings
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" id="trExcl" style="width:auto"> include excluded recordings
+        </label></div>
+      <div class="f" style="min-width:auto">
+        <button class="btn" id="trTableBtn" onclick="toggleTrendTable()">Table view</button></div>
+    </div>
+    <div id="trends"></div>
+  </section>
+
+  <section class="view" id="v-vault">
+    <h2 style="margin-top:8px">Vault status</h2>
+    <p class="muted">Whether everything recorded has actually made it through the pipeline
+    and into the vault — and what is left if it hasn't.</p>
+    <div id="vault"></div>
+  </section>
+
+  <section class="view" id="v-systems">
+    <p class="muted">Commitments that recur become named systems. Adherence is the share of that system's actions you actually completed.</p>
+    <div class="card">
+      <div class="row">
+        <input id="sysName" placeholder="System name" style="max-width:230px">
+        <input id="sysCadence" placeholder="Cadence (e.g. weekly)" style="max-width:190px">
+        <button class="btn primary" onclick="newSystem()">Add system</button>
+      </div>
+    </div>
+    <div id="sysList"></div>
+  </section>
+
+  <section class="view" id="v-measures"><div id="measures"></div></section>
+
+  <section class="view" id="v-help">
+    <h2 style="margin-top:8px">How this works</h2>
+    <div class="card">
+      <p>Your Plaud device uploads recordings to Plaud's cloud — on pin models there is no
+      way around that, since they have no USB mode. Everything after that happens here:
+      the audio is pulled down to your own disk, transcribed and summarized on your own
+      machine, and then you decide what it becomes.</p>
+      <p class="muted">Plaud charges for <b>transcription minutes</b>, not storage. Because their AI
+      never touches your audio, those minutes stay unspent.</p>
+    </div>
+
+    <h2>The daily loop</h2>
+    <div class="card">
+      <ol style="margin:0;padding-left:20px;line-height:2">
+        <li><b>Sync</b> — press <span class="chip">Sync now</span>, or let the schedule do it.
+            Downloads, transcribes, summarizes, writes notes, and proposes actions.</li>
+        <li><b>Triage the Inbox</b> — open each recording and decide where it belongs.</li>
+        <li><b>Work the Actions board</b> — accept what's real, complete it, score the outcome.</li>
+        <li><b>Check Measures</b> — weekly, to see whether any of this is actually paying off.</li>
+      </ol>
+    </div>
+
+    <h2>Triage: the three tiers</h2>
+    <div class="card">
+      <p><b>Into cognitive stack</b> — the transcript is copied into your <span class="mono">stack/</span>
+      folder, the only directory your knowledge index reads. Use this for work you want
+      searchable and connected.</p>
+      <p><b>Local only</b> — archived and searchable here, but kept out of the corpus.
+      The right default for anything personal or involving other people. A pin recorder
+      picks up whoever is in earshot; they did not opt in.</p>
+      <p><b>Exclude</b> — noise, misfires, empty rooms.</p>
+      <p class="faint">Tiering is physical, not advisory: changing a recording to local-only
+      deletes its copy from <span class="mono">stack/</span> on the next sync.</p>
+    </div>
+
+    <h2>Actions</h2>
+    <div class="card">
+      <p>Each recording is scanned for two kinds of item:</p>
+      <p><span class="chip warn">commitment</span> someone said they would do it &nbsp;
+         <span class="chip">suggestion</span> the conversation implies a useful next step</p>
+      <p>Both arrive as <b>proposed</b> and do nothing until you accept them. Many recordings
+      contain nothing actionable — an empty list is a normal, correct answer, not a failure.</p>
+      <p>Accepting asks for an <b>intent</b>: what this is supposed to achieve. That is what
+      the outcome score is later judged against. Finishing a task and the task having
+      worked are different things, and only one of them is worth measuring.</p>
+      <p>A commitment that keeps recurring can be promoted to a <b>system</b> under the
+      Systems tab, which then tracks an adherence rate over time.</p>
+    </div>
+
+    <h2>Tone and the trend</h2>
+    <div class="card">
+      <p>Every transcript is scored for emotional register as part of the normal run — no
+      switch to flip. Each is read in segments and reduced, so a long conversation that turned
+      partway through registers as <span class="chip">mixed</span> instead of averaging out flat.
+      Two numbers come back:</p>
+      <p><b>Valence</b> — how positive or negative it felt, from −1 to +1. <b>Energy</b> — how
+      activated, from 0 to 1, independently of valence. An argument and a celebration are both
+      high energy.</p>
+      <p>A third number matters more than either: <b>confidence</b>. This is a language model
+      reading a machine transcript, which has no tone of voice in it, drops words and mangles
+      names. When the model says it isn't sure, the console draws that reading as a hollow dot
+      and leaves it out of the trend line. Nothing here is a measurement of how anyone felt —
+      it is a prompt to go back and listen.</p>
+      <p>Most conversation is unremarkable, and readings near zero are the common, correct
+      answer. The value is in the <b>Trends</b> tab, where a year of them says something a single
+      recording never could. Click any point to open that recording.</p>
+      <p>Recordings you tier <b>exclude</b> are left off the chart, just as they are kept out of
+      <span class="mono">stack/</span> — otherwise the demo files that shipped with the device, and
+      your own misfires, sit in the trend reporting their mood as yours. A checkbox above the chart
+      folds them back in.</p>
+    </div>
+
+    <h2>Is the vault up to date?</h2>
+    <div class="card">
+      <p>The pill in the header answers it at a glance, and opens the full breakdown. "Up to
+      date" is not one fact — it fails in several independent ways, and this checks all of them:</p>
+      <ul style="line-height:1.9">
+        <li>recordings sitting in Plaud's cloud that never reached this disk</li>
+        <li>audio downloaded but never transcribed, summarized, scored or scanned</li>
+        <li>notes the manifest records that no longer exist in your vault</li>
+        <li>a <span class="mono">stack/</span> corpus that has drifted from your triage decisions</li>
+      </ul>
+      <p class="faint">Untriaged recordings and unreviewed proposals are listed separately and
+      never count against the verdict — the machine has done its part, and an indicator that
+      turns amber because you have reading to do is one you'll learn to ignore.</p>
+      <p>The cloud check costs a network call, so it happens when you ask, not on a timer:
+      open <b>Vault status</b> and press <b>Check Plaud now</b>, or run
+      <span class="mono">plaudctl fresh --cloud</span>.</p>
+    </div>
+
+    <h2>Deleting from Plaud's cloud</h2>
+    <div class="card">
+      <p>Open a recording and tick <b>mark for cloud deletion</b>. Nothing is deleted by
+      any scheduled job — marking only makes it <i>eligible</i>. You then run:</p>
+      <pre class="mono" style="background:var(--panel-2);padding:10px;border-radius:6px">plaudctl prune            # dry run, shows what would go
+plaudctl prune --yes      # actually sends it</pre>
+      <p>The first time, you must verify the deletion endpoint on a single recording with
+      <span class="mono">plaudctl prune --probe --yes</span> — Plaud's delete API is
+      undocumented, so this proves it behaves before anything else is touched. Deletion
+      uses Plaud's <i>trash</i>, so it stays recoverable in their app for a window.</p>
+      <p class="faint">A recording is only eligible if its download was verified complete, its
+      local copy still hashes clean, it has been transcribed, and it is older than the
+      configured floor.</p>
+    </div>
+
+    <h2>Command line</h2>
+    <div class="card"><pre class="mono" style="margin:0;background:var(--panel-2);padding:12px;border-radius:6px;overflow-x:auto">plaudctl run          sync → transcribe → summarize → sentiment → notes → extract
+plaudctl fresh        is the vault up to date? (--cloud also asks Plaud)
+plaudctl sentiment    score tone for anything not yet scored
+plaudctl status       what is archived and what is pending
+plaudctl verify       re-hash the archive, catch bitrot or missing files
+plaudctl web          this console
+plaudctl service install    run automatically in the background
+plaudctl init         reconfigure storage, transcription, or model</pre></div>
+
+    <h2>This install</h2>
+    <div id="settings"></div>
+  </section>
+</main>
+
+<dialog id="dlg"><div id="dlgBody"></div></dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => (s??'').toString().replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api = async (u, opt) => {
+  const r = await fetch(u, opt);
+  if (!r.ok) { const t = await r.text(); throw new Error(t.slice(0,200)); }
+  return r.status === 204 ? null : r.json();
+};
+const jpost = (u, b, m='POST') => api(u, {method:m, headers:{'Content-Type':'application/json'}, body:JSON.stringify(b)});
+const pct = v => v === null || v === undefined ? '—' : Math.round(v*100)+'%';
+const num = v => v === null || v === undefined ? '—' : v;
+
+// theme
+const root = document.documentElement;
+if (localStorage.pvTheme) root.dataset.theme = localStorage.pvTheme;
+$('#themeBtn').onclick = () => {
+  const cur = root.dataset.theme || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark':'light');
+  root.dataset.theme = localStorage.pvTheme = cur === 'dark' ? 'light':'dark';
+};
+
+let VIEW = 'inbox';
+function show(v){
+  VIEW = v;
+  document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v'+'-'+v));
+  document.querySelectorAll('nav button[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  ({inbox:loadInbox, library:loadLibrary, actions:loadActions, trends:loadTrends,
+    vault:loadVault, systems:loadSystems, measures:loadMeasures, help:loadSettings}[v]||(()=>{}))();
+}
+document.querySelectorAll('nav button[data-v]').forEach(b => b.onclick = () => show(b.dataset.v));
+
+async function boot(){
+  try {
+    const s = await api('/api/status');
+    if (!s.archive_available) {
+      $('#banner').innerHTML = `<div class="banner"><b>Archive unavailable.</b> ${esc(s.detail)}</div>`;
+      return;
+    }
+    const c = s.counts;
+    $('#hdrStatus').textContent = `${c.transcribed}/${c.total} transcribed · ${c.pruned} pruned · prune ${s.prune_unlocked?'unlocked':'locked'}`;
+    show('inbox');
+    loadFreshness();
+  } catch(e){ $('#banner').innerHTML = `<div class="banner">${esc(e.message)}</div>`; }
+}
+
+// ---------------------------------------------------------------- freshness
+// The pill answers the local question for free. The cloud question costs a network
+// call, so it is only asked when you open the Vault view or press Check Plaud —
+// never on a timer, which would poll their API forever with a console left open.
+let FRESH = null;
+async function loadFreshness(cloud){
+  try {
+    FRESH = await api('/api/freshness' + (cloud ? '?cloud=true' : ''));
+  } catch(e){ return; }
+  const pill = $('#freshPill');
+  pill.className = FRESH.up_to_date ? 'ok' : 'behind';
+  $('#freshText').textContent = FRESH.up_to_date
+    ? (FRESH.remote.checked ? 'Vault up to date' : 'Up to date on disk')
+    : FRESH.headline;
+  if (VIEW === 'vault') renderVault();
+}
+
+function loadVault(){ renderVault(); if (!FRESH) loadFreshness(); }
+
+function renderVault(){
+  const f = FRESH;
+  if (!f) { $('#vault').innerHTML = '<div class="empty">Checking…</div>'; return; }
+  const rows = [];
+
+  const pend = f.pending.length
+    ? `<table><thead><tr><th>Waiting</th><th>Stage</th><th>Run</th></tr></thead><tbody>${
+        f.pending.map(p=>`<tr><td><b>${p.count}</b></td><td>recordings not yet ${esc(p.label)}</td>
+          <td class="mono faint">${esc(p.fix)}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="faint">Every recording has been through every stage.</div>';
+  rows.push(`<div class="card"><h3>Pipeline</h3>${pend}</div>`);
+
+  const r = f.remote;
+  let cloud;
+  if (!r.checked) {
+    cloud = `<div class="faint">Not checked${r.detail?' — '+esc(r.detail):''}.</div>
+      <button class="btn sm" style="margin-top:9px" onclick="loadFreshness(true)">Check Plaud now</button>`;
+  } else if (r.new) {
+    cloud = `<p><span class="chip warn">${r.new} not yet archived here</span> of ${r.cloud_total} in Plaud's cloud.</p>
+      <table><tbody>${r.newest.map(n=>`<tr><td class="mono faint">${n.started_iso}</td>
+        <td>${esc(n.filename)}</td><td class="faint">${n.duration_min} min</td></tr>`).join('')}</tbody></table>
+      <button class="btn primary sm" style="margin-top:10px" onclick="startRun()">Sync now</button>`;
+  } else {
+    cloud = `<div><span class="chip good">nothing new</span> all ${r.cloud_total} recordings in Plaud's cloud are archived here.
+      <button class="btn sm" style="margin-left:8px" onclick="loadFreshness(true)">Re-check</button></div>`;
+  }
+  rows.push(`<div class="card"><h3>Plaud's cloud</h3>${cloud}</div>`);
+
+  if (f.missing_notes.length) rows.push(`<div class="card"><h3>Notes missing from the vault</h3>
+    <p class="faint">The manifest records these notes, but the files are gone — deleted in Obsidian,
+    or the vault moved. The next <span class="mono">plaudctl notes</span> run rewrites them.</p>
+    ${f.missing_notes.slice(0,10).map(n=>`<div class="mono faint">${esc(n.path)}</div>`).join('')}</div>`);
+
+  const s = f.stack;
+  rows.push(`<div class="card"><h3>Cognitive stack corpus</h3>
+    ${s.drifted
+      ? `<p><span class="chip warn">out of step with triage</span> ${s.add} to copy in,
+         ${s.update} to refresh, ${s.remove} to remove.</p>
+         <p class="faint">Run <span class="mono">plaudctl tier</span>, or triage any recording — both reconcile it.</p>`
+      : `<div><span class="chip good">in step</span> ${s.approved} transcripts approved and present.</div>`}</div>`);
+
+  if (f.untriaged || f.proposed_actions) rows.push(`<div class="card"><h3>Waiting on you</h3>
+    <p class="faint">Not counted against "up to date" — the machine has done its part.</p>
+    ${f.untriaged?`<div>${f.untriaged} recordings untriaged${f.oldest_untriaged_days?`, oldest ${f.oldest_untriaged_days} days`:''}
+      <button class="btn sm" style="margin-left:8px" onclick="show('inbox')">Triage</button></div>`:''}
+    ${f.proposed_actions?`<div style="margin-top:7px">${f.proposed_actions} proposed actions awaiting review
+      <button class="btn sm" style="margin-left:8px" onclick="show('actions')">Review</button></div>`:''}</div>`);
+
+  rows.push(`<div class="card"><h3>Last full run</h3>${
+    f.last_run_iso
+      ? `<div>${f.last_run_iso} · took ${Math.round(f.last_run.seconds/60)} min ·
+         ${f.last_run.rc===0?'<span class="chip good">clean</span>':`<span class="chip bad">exit ${f.last_run.rc}</span>`}</div>`
+      : '<div class="faint">No run recorded yet. Press <b>Sync now</b>, or install the scheduled service with <span class="mono">plaudctl service install</span>.</div>'
+  }</div>`);
+
+  $('#vault').innerHTML = rows.join('');
+}
+
+// ---------------------------------------------------------------- recordings
+function recCard(r, showTier){
+  const a = r.action_counts;
+  const tier = r.tier ? `<span class="chip ${r.tier==='stack'?'gold':''}">${r.tier}</span>` : '';
+  const prune = r.marked_for_prune ? '<span class="chip bad">marked for deletion</span>' : '';
+  const acts = a.proposed ? `<span class="chip warn">${a.proposed} proposed</span>` : '';
+  const open = a.open ? `<span class="chip">${a.open} open</span>` : '';
+  const s = r.sentiment;
+  const tone = s ? `<span class="chip" title="valence ${VAL(s.valence)}, confidence ${s.confidence}"
+    style="border-color:${polColor(s.valence)}">${esc(s.label)} ${VAL(s.valence)}</span>` : '';
+  return `<div class="card">
+    <div class="row spread">
+      <div style="flex:1;min-width:250px">
+        <h3>${esc(r.filename)}</h3>
+        <div class="faint">${r.started_iso} · ${r.duration_min} min</div>
+      </div>
+      <div class="row">${showTier?tier:''}${prune}${tone}${acts}${open}
+        <button class="btn sm" onclick="openRec('${r.id}')">Open</button>
+      </div>
+    </div></div>`;
+}
+
+async function loadInbox(){
+  const rows = await api('/api/recordings?untriaged=true');
+  $('#inboxList').innerHTML = rows.length
+    ? rows.map(r => recCard(r,false)).join('')
+    : '<div class="empty">Inbox clear — every transcribed recording has been triaged.</div>';
+}
+
+async function loadLibrary(){
+  const t = $('#libTier').value, q = $('#libSearch').value;
+  const rows = await api(`/api/recordings?${t?`tier=${t}&`:''}q=${encodeURIComponent(q)}`);
+  $('#libList').innerHTML = rows.length
+    ? rows.map(r => recCard(r,true)).join('')
+    : '<div class="empty">Nothing matches.</div>';
+}
+$('#libSearch').oninput = () => loadLibrary();
+$('#libTier').onchange = () => loadLibrary();
+
+// ---------------------------------------------------------------- detail
+let CUR = null;
+async function openRec(id){
+  CUR = await api('/api/recordings/'+id);
+  const r = CUR;
+  const tr = esc(r.transcript).replace(/\[(\d{2}:\d{2}:\d{2})\]/g,
+    (m,t)=>`<span class="ts" onclick="seek('${t}')">[${t}]</span>`);
+  const sum = r.summary ? mdToHtml(r.summary) : '<p class="faint">No summary.</p>';
+
+  $('#detail').innerHTML = `
+    <h2 style="margin-top:14px">${esc(r.filename)}</h2>
+    <div class="faint" style="margin-bottom:10px">${r.started_iso} · ${r.duration_min} min · ${esc(r.transcribe_model||'')}</div>
+    <audio id="au" controls preload="none" src="/api/recordings/${r.id}/audio"></audio>
+
+    <div class="card">
+      <label>Triage — what should happen to this recording?</label>
+      <div class="tierbar">
+        ${['stack','local','exclude'].map(t=>`<button class="btn ${r.tier===t?'primary':''}" onclick="setTier('${t}')">${
+          {stack:'Into cognitive stack',local:'Local only',exclude:'Exclude'}[t]}</button>`).join('')}
+        <label style="display:flex;align-items:center;gap:6px;margin:0 0 0 10px;font-size:13px">
+          <input type="checkbox" id="mark" style="width:auto" ${r.marked_for_prune?'checked':''}
+            onchange="setTier(CUR.tier||'local')"> mark for cloud deletion
+        </label>
+      </div>
+      <div class="faint" style="margin-top:8px">
+        <b>Into cognitive stack</b> copies the transcript into <span class="mono">PLAUD/stack/</span>, the only directory Synapse catalogs.
+        <b>Local only</b> keeps it archived but out of the corpus. Deletion is never automatic — <span class="mono">plaudctl prune</span> only touches marked recordings.
+      </div>
+    </div>
+
+    ${sentimentCard(r.sentiment)}
+
+    <div class="split">
+      <div>
+        <h2>Summary</h2><div class="summary">${sum}</div>
+        <h2>Actions <button class="btn sm" onclick="addAction()">+ add</button></h2>
+        <div id="recActions"></div>
+      </div>
+      <div><h2>Transcript</h2><div class="transcript" id="tr">${tr}</div></div>
+    </div>`;
+  renderRecActions();
+  show('detail');
+}
+
+// The within-recording arc the aggregate was reduced from — a flat mean over a
+// two-hour conversation that turned partway through is worth being able to open up.
+function sentimentCard(s){
+  if (!s) return `<div class="card"><h3>Tone</h3><div class="faint">Not scored — either too short to
+    read, or the model has not reached it yet. Run <span class="mono">plaudctl sentiment</span>.</div></div>`;
+  const arc = (s.segments||[]).length > 1 ? `
+    <div style="margin-top:12px"><div class="faint" style="margin-bottom:6px">Segment by segment, start to end</div>
+    <div style="display:flex;gap:2px;height:26px;align-items:stretch">${
+      s.segments.map(g=>`<div title="segment ${g.n}: ${VAL(g.valence)}" style="flex:1;background:${polColor(g.valence)};
+        border-radius:3px;opacity:${0.45 + 0.55*(g.confidence||0.5)}"></div>`).join('')}</div>
+    <div class="faint" style="margin-top:4px">Swing across the recording: ${VAL(s.spread||0)} — taller
+      opacity means the model was more confident in that stretch.</div></div>` : '';
+  return `<div class="card"><div class="row spread">
+      <div><h3>Tone <span class="chip" style="border-color:${polColor(s.valence)}">${esc(s.label)}</span></h3>
+        <div class="faint">valence <b>${VAL(s.valence)}</b> · energy ${s.energy===null?'—':s.energy.toFixed(2)}
+          · confidence ${s.confidence===null?'—':s.confidence.toFixed(2)} · ${esc(s.model||'')}</div></div>
+      <button class="btn sm" onclick="show('trends')">See the trend</button>
+    </div>
+    ${s.drivers.length?`<div style="margin-top:9px">Read from: ${s.drivers.map(d=>`<span class="chip">${esc(d)}</span>`).join(' ')}</div>`:''}
+    ${arc}
+    <div class="faint" style="margin-top:10px">An estimate from the transcript, which carries no tone of
+      voice. Low confidence means the model is telling you not to trust it.</div>
+  </div>`;
+}
+
+function seek(t){
+  const [h,m,s] = t.split(':').map(Number);
+  const au = $('#au'); au.currentTime = h*3600+m*60+s; au.play();
+}
+
+function mdToHtml(md){
+  return esc(md)
+    .replace(/^## (.+)$/gm,'<h2>$1</h2>')
+    .replace(/^[-*] (.+)$/gm,'<li>$1</li>')
+    .replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g,'<ul>$1</ul>')
+    .replace(/^(?!<[hu])(.+)$/gm,'<p>$1</p>');
+}
+
+async function setTier(tier){
+  await jpost(`/api/recordings/${CUR.id}/triage`, {tier, marked_for_prune: $('#mark').checked});
+  await openRec(CUR.id);
+}
+
+function renderRecActions(){
+  const list = CUR.actions||[];
+  $('#recActions').innerHTML = list.length
+    ? list.map(actionCard).join('')
+    : '<div class="empty" style="padding:22px">No actions yet. Run <span class="mono">plaudctl extract</span> to propose some.</div>';
+}
+
+// ---------------------------------------------------------------- actions
+const STATUS_CHIP = {proposed:'warn', accepted:'', in_progress:'gold', done:'good', dropped:''};
+function actionCard(a){
+  const due = a.due_at ? new Date(a.due_at*1000).toISOString().slice(0,10) : '';
+  const src = a.recording_name ? `<div class="faint">from ${esc(a.recording_name)}${a.recording_date?' · '+a.recording_date:''}</div>` : '';
+  const quote = a.quote ? `<div class="faint" style="font-style:italic;margin-top:5px">“${esc(a.quote)}”</div>` : '';
+  const score = a.outcome_score ? `<span class="chip ${a.outcome_score>=4?'good':a.outcome_score<=2?'bad':'warn'}">outcome ${a.outcome_score}/5</span>` : '';
+  const sys = a.system_name ? `<span class="chip gold">${esc(a.system_name)}</span>` : '';
+  let btns = '';
+  if (a.status === 'proposed') btns = `<button class="btn sm primary" onclick="acceptAction(${a.id})">Accept</button>
+      <button class="btn sm" onclick="setStatus(${a.id},'dropped')">Reject</button>`;
+  else if (a.status === 'accepted') btns = `<button class="btn sm" onclick="setStatus(${a.id},'in_progress')">Start</button>
+      <button class="btn sm primary" onclick="completeAction(${a.id})">Complete</button>`;
+  else if (a.status === 'in_progress') btns = `<button class="btn sm primary" onclick="completeAction(${a.id})">Complete</button>`;
+  return `<div class="card">
+    <div class="row spread">
+      <div style="flex:1;min-width:240px">
+        <div>${esc(a.text)}</div>${src}${quote}
+        ${a.intent?`<div class="faint" style="margin-top:5px"><b>Intent:</b> ${esc(a.intent)}</div>`:''}
+      </div>
+      <div class="row">
+        <span class="chip ${STATUS_CHIP[a.status]||''}">${a.status.replace('_',' ')}</span>
+        ${a.overdue?'<span class="chip bad">overdue</span>':''}
+        ${due?`<span class="chip">due ${due}</span>`:''}${score}${sys}${btns}
+      </div>
+    </div></div>`;
+}
+
+async function loadActions(){
+  const f = $('#actFilter').value;
+  let rows = await api('/api/actions'+(f?`?status=${f}`:''));
+  if (!f) rows = rows.filter(a => a.status !== 'done' && a.status !== 'dropped');
+  $('#actList').innerHTML = rows.length ? rows.map(actionCard).join('')
+    : '<div class="empty">Nothing here.</div>';
+}
+$('#actFilter').onchange = () => loadActions();
+
+function dlg(html){ $('#dlgBody').innerHTML = html; $('#dlg').showModal(); }
+function closeDlg(){ $('#dlg').close(); }
+
+async function acceptAction(id){
+  const systems = await api('/api/systems');
+  dlg(`<h2 style="margin-top:0">Accept action</h2>
+    <p class="faint">State what this is supposed to achieve. Outcome scoring later is judged against exactly this — vague intent, meaningless score.</p>
+    <div class="field"><label>Intent — what result should this produce?</label>
+      <textarea id="dIntent" placeholder="e.g. Cognitive-stack tiering decided so recordings can feed Synapse safely"></textarea></div>
+    <div class="field"><label>Owner</label><input id="dOwner" placeholder="who is doing it"></div>
+    <div class="field"><label>Due date</label><input type="date" id="dDue"></div>
+    <div class="field"><label>Part of a system (optional)</label>
+      <select id="dSys"><option value="">—</option>${systems.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="closeDlg()">Cancel</button>
+      <button class="btn primary" onclick="doAccept(${id})">Accept</button></div>`);
+}
+async function doAccept(id){
+  const due = $('#dDue').value;
+  await jpost('/api/actions/'+id, {
+    status:'accepted', intent:$('#dIntent').value, owner:$('#dOwner').value,
+    system_id: $('#dSys').value ? Number($('#dSys').value) : null,
+    due_at: due ? Math.floor(new Date(due+'T12:00:00').getTime()/1000) : null
+  }, 'PATCH');
+  closeDlg(); await refresh();
+}
+
+async function completeAction(id){
+  const a = (await api('/api/actions')).find(x => x.id === id) || {};
+  dlg(`<h2 style="margin-top:0">Complete action</h2>
+    <div class="card" style="margin:0 0 12px"><div class="faint">Stated intent</div>
+      <div>${a.intent ? esc(a.intent) : '<span class="faint">none stated — this completion cannot be scored meaningfully</span>'}</div></div>
+    <div class="field"><label>Did it achieve that intent? 1 = no, 5 = fully</label>
+      <select id="dScore">${[5,4,3,2,1].map(n=>`<option value="${n}">${n}</option>`).join('')}</select></div>
+    <div class="field"><label>What actually happened?</label><textarea id="dNote"></textarea></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="closeDlg()">Cancel</button>
+      <button class="btn primary" onclick="doComplete(${id})">Mark done</button></div>`);
+}
+async function doComplete(id){
+  await jpost('/api/actions/'+id, {status:'done', outcome_score:Number($('#dScore').value), outcome_note:$('#dNote').value}, 'PATCH');
+  closeDlg(); await refresh();
+}
+async function setStatus(id, status){ await jpost('/api/actions/'+id, {status}, 'PATCH'); await refresh(); }
+
+function addAction(){
+  dlg(`<h2 style="margin-top:0">Add action</h2>
+    <div class="field"><label>Action</label><input id="nText"></div>
+    <div class="field"><label>Intent</label><textarea id="nIntent"></textarea></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="closeDlg()">Cancel</button>
+      <button class="btn primary" onclick="doAdd()">Add</button></div>`);
+}
+async function doAdd(){
+  await jpost('/api/actions', {recording_id:CUR?CUR.id:null, text:$('#nText').value, intent:$('#nIntent').value, accept:true});
+  closeDlg(); if (CUR) await openRec(CUR.id); else await refresh();
+}
+
+async function refresh(){
+  if (VIEW === 'detail' && CUR) await openRec(CUR.id); else show(VIEW);
+}
+
+// ---------------------------------------------------------------- systems
+async function newSystem(){
+  const name = $('#sysName').value.trim(); if (!name) return;
+  await jpost('/api/systems', {name, cadence:$('#sysCadence').value});
+  $('#sysName').value = $('#sysCadence').value = ''; loadSystems();
+}
+async function loadSystems(){
+  const rows = await api('/api/systems');
+  $('#sysList').innerHTML = rows.length ? `<table><thead><tr>
+      <th>System</th><th>Cadence</th><th>Instances</th><th>Done</th><th>Adherence</th><th>Last 30d</th><th>Mean outcome</th>
+    </tr></thead><tbody>${rows.map(s=>`<tr>
+      <td><b>${esc(s.name)}</b></td><td class="muted">${esc(s.cadence||'—')}</td>
+      <td>${s.instances}</td><td>${s.done}</td>
+      <td>${pct(s.adherence)}</td><td>${pct(s.adherence_30d)}</td><td>${num(s.mean_outcome)}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="empty">No systems yet. Promote a recurring commitment by naming it here, then assign actions to it when you accept them.</div>';
+}
+
+// ---------------------------------------------------------------- measures
+function tile(n, k, sub){ return `<div class="tile"><div class="n">${n}</div><div class="k">${k}</div>${sub?`<div class="sub">${sub}</div>`:''}</div>`; }
+async function loadMeasures(){
+  const m = await api('/api/metrics');
+  const c = m.completion, o = m.outcomes, p = m.pipeline;
+  $('#measures').innerHTML = `
+    <h2>Follow-through</h2>
+    <div class="tiles">
+      ${tile(pct(c.completion_rate),'Completion rate', `${c.done} done of ${c.accepted} accepted`)}
+      ${tile(num(c.median_cycle_days),'Median cycle (days)','accepted → done')}
+      ${tile(pct(c.acceptance_rate),'Acceptance rate','of proposals you decided on')}
+      ${tile(c.overdue,'Overdue', c.overdue ? 'past due, still open' : 'nothing late')}
+    </div>
+    <h2>Outcomes</h2>
+    <p class="faint" style="margin-top:-6px">Completing something is not the same as it working. This scores done actions against the intent stated when you accepted them.</p>
+    <div class="tiles">
+      ${tile(num(o.mean_outcome),'Mean outcome','out of 5')}
+      ${tile(pct(o.intent_coverage),'Intent coverage','done actions with a stated intent')}
+      ${tile(o.unscored,'Unscored','completed but never judged')}
+      ${tile(o.low_outcome.length,'Low outcome','done, but scored 1–2')}
+    </div>
+    ${o.low_outcome.length ? `<div class="card"><b>Completed but ineffective</b>${o.low_outcome.map(a=>
+      `<div style="margin-top:9px"><div>${esc(a.text)}</div><div class="faint">intent: ${esc(a.intent||'—')} · scored ${a.score}/5</div></div>`).join('')}</div>` : ''}
+    <h2>Capture pipeline</h2>
+    <p class="faint" style="margin-top:-6px">Is recording earning its keep, or just accumulating audio?</p>
+    <div class="tiles">
+      ${tile(pct(p.conversion_rate),'Conversion','recordings that became actions')}
+      ${tile(num(p.median_decision_days),'Median triage (days)','recorded → decided')}
+      ${tile(p.untriaged,'Untriaged', p.oldest_untriaged_days ? `oldest ${p.oldest_untriaged_days}d` : '')}
+      ${tile(num(p.actions_per_hour),'Actions / audio hour','yield per hour recorded')}
+      ${tile(p.audio_hours,'Hours captured','')}
+    </div>
+    <h2>Systems</h2><div id="sysMini"></div>`;
+  const rows = m.systems;
+  $('#sysMini').innerHTML = rows.length ? `<table><thead><tr><th>System</th><th>Instances</th><th>Adherence</th><th>Last 30d</th><th>Mean outcome</th></tr></thead>
+    <tbody>${rows.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${s.instances}</td><td>${pct(s.adherence)}</td><td>${pct(s.adherence_30d)}</td><td>${num(s.mean_outcome)}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="empty">No systems defined yet.</div>';
+}
+
+
+// ---------------------------------------------------------------- trends
+// Valence is polarity around a zero baseline, so it gets a diverging scale: two hues
+// that read as opposite with a neutral gray midpoint. Position on the axis already
+// encodes the value — the colour is reinforcement, and the table view is the twin
+// that carries every number without any colour at all.
+const polColor = v => `var(${v<=-0.5?'--pol-neg-2':v<=-0.15?'--pol-neg-1':v<0.15?'--pol-0':v<0.5?'--pol-pos-1':'--pol-pos-2'})`;
+const VAL = v => (v>=0?'+':'−') + Math.abs(v).toFixed(2);
+const shortDate = ts => new Date(ts*1000).toLocaleDateString(undefined,{month:'short',day:'numeric'});
+const monthDate = ts => new Date(ts*1000).toLocaleDateString(undefined,{month:'short',year:'2-digit'});
+
+let TREND = null, TREND_TABLE = false;
+
+async function loadTrends(){
+  const days = $('#trRange').value, bucket = $('#trBucket').value;
+  const low = $('#trLow').checked, excl = $('#trExcl').checked;
+  $('#trends').style.opacity = TREND ? '.55' : '1';   // hold the old render, no skeleton flash
+  TREND = await api(`/api/sentiment/trend?bucket=${bucket}${days?`&days=${days}`:''}`
+    + `${low?'&low_confidence=true':''}${excl?'&excluded=true':''}`);
+  $('#trends').style.opacity = '1';
+  renderTrends();
+}
+['#trRange','#trBucket','#trLow','#trExcl'].forEach(s => $(s).onchange = loadTrends);
+function toggleTrendTable(){
+  TREND_TABLE = !TREND_TABLE;
+  $('#trTableBtn').textContent = TREND_TABLE ? 'Chart view' : 'Table view';
+  renderTrends();
+}
+
+function renderTrends(){
+  const t = TREND;
+  const cov = t.coverage;
+  if (!t.points.length){
+    $('#trends').innerHTML = `<div class="empty">
+      No tone readings in this range.${cov.scored ? '' :
+      ' Nothing has been scored yet — run <span class="mono">plaudctl sentiment</span>, or press Sync now.'}</div>`;
+    return;
+  }
+
+  const dir = t.delta === null ? '—'
+    : Math.abs(t.delta) < 0.05 ? 'steady'
+    : (t.delta > 0 ? 'warmer ' : 'harder ') + VAL(t.delta);
+  const mix = t.distribution;
+  const top = Object.entries(mix).sort((a,b)=>b[1]-a[1])[0];
+
+  $('#trends').innerHTML = `
+    <div class="tiles">
+      ${tile(t.mean_valence===null?'—':VAL(t.mean_valence),'Mean valence','−1 hard · 0 neutral · +1 warm')}
+      ${tile(dir,'Direction','second half of the range vs the first')}
+      ${tile(esc(top[0]),'Most common tone',`${top[1]} of ${t.counted} readings`)}
+      ${tile(pct(cov.rate),'Coverage',`${cov.scored} of ${cov.transcribed} transcripts scored`)}
+    </div>
+    <div class="card">
+      <div class="row spread" style="align-items:flex-start">
+        <div><h3>Valence over time</h3>
+          <div class="faint" style="max-width:640px">Each dot is one recording, placed at the time it was
+          recorded. The gold line is the ${t.bucket}ly mean, weighted by recording length — an hour-long
+          conversation carries more of a week than a two-minute memo. Click a dot to open that recording.</div>
+        </div>
+      </div>
+      ${TREND_TABLE ? trendTable(t) : `<div class="chartwrap" id="chartwrap" style="margin-top:14px">
+        ${sentimentChart(t)}<div id="tip"></div></div>${scaleKey(t)}`}
+    </div>
+    ${t.excluded_low_confidence && !t.include_low_confidence ? `<p class="faint">
+      ${t.excluded_low_confidence} reading${t.excluded_low_confidence===1?' was':'s were'} left out of the
+      trend line because the model rated its own confidence below ${t.confidence_floor}. They are plotted as
+      hollow dots. Tick <b>include low-confidence readings</b> to fold them in.</p>` : ''}
+    ${t.excluded_by_tier && !t.include_excluded ? `<p class="faint">
+      ${t.excluded_by_tier} recording${t.excluded_by_tier===1?'' :'s'} tiered <b>exclude</b>
+      ${t.excluded_by_tier===1?'is':'are'} not plotted at all. Tiering is physical everywhere else, and a
+      chart that keeps plotting what you excluded reports its mood as yours.</p>` : ''}
+    <p class="faint">These scores are an estimate made by a local language model reading a machine transcript.
+    A transcript has no tone of voice in it, so treat a single reading as a prompt to go and listen —
+    the trend is the part worth reading.</p>`;
+
+  if (!TREND_TABLE) wireChart();
+}
+
+function scaleKey(t){
+  const sw = ['--pol-neg-2','--pol-neg-1','--pol-0','--pol-pos-1','--pol-pos-2']
+    .map(c=>`<i style="background:var(${c})"></i>`).join('');
+  return `<div class="scalekey">
+    <span>hard going</span><span class="sw">${sw}</span><span>warm</span>
+    <span style="margin-left:16px"><span class="hollowkey"></span> hollow = model was unsure</span>
+    <span style="margin-left:16px"><svg width="24" height="9" style="vertical-align:-1px" aria-hidden="true"><line x1="1" y1="4.5" x2="23" y2="4.5" stroke="var(--gold)" stroke-width="2" stroke-linecap="round"/></svg> ${t.bucket}ly mean</span>
+  </div>`;
+}
+
+function sentimentChart(t){
+  const pts = t.points, buckets = t.buckets;
+  // L is sized for the widest y tick label ("0 neutral"), not for the plot — an axis
+  // gutter that only fits the plot is how axis labels end up clipped.
+  const W = 920, H = 320, L = 74, R = 24, T = 22, B = 36;
+  const x0 = L, x1 = W - R, y0 = T, y1 = H - B;
+
+  let tmin = Math.min(...pts.map(p=>p.started_at), ...buckets.map(b=>b.start));
+  let tmax = Math.max(...pts.map(p=>p.started_at));
+  const span = Math.max(tmax - tmin, 86400);
+  const X = ts => x0 + (ts - tmin) / span * (x1 - x0);
+  const Y = v  => y1 - (v + 1) / 2 * (y1 - y0);
+
+  // Gridlines: solid hairlines, one shade off the surface. The zero rule is the
+  // one line that carries meaning, so it alone is stepped up.
+  const TICK = {1:'+1 warm', 0.5:'+0.5', 0:'0 neutral', '-0.5':'−0.5', '-1':'−1 hard'};
+  const grid = [1, 0.5, 0, -0.5, -1].map(v => {
+    const y = Y(v).toFixed(1);
+    const cls = v === 0 ? 'zero' : 'grid';
+    return `<line class="${cls}" x1="${x0}" y1="${y}" x2="${x1}" y2="${y}"/>`
+      + `<text class="axis" x="${x0-9}" y="${y}" text-anchor="end" dominant-baseline="middle">${TICK[v]}</text>`;
+  }).join('');
+
+  const wide = span > 200 * 86400;
+  const ticks = Array.from({length:5}, (_,i) => tmin + span * i / 4).map(ts =>
+    `<text class="axis" x="${X(ts).toFixed(1)}" y="${y1+20}" text-anchor="${'middle'}">${wide?monthDate(ts):shortDate(ts)}</text>`).join('');
+
+  const mean = buckets.length > 1
+    ? `<polyline class="mean" points="${buckets.map(b=>`${X(b.start).toFixed(1)},${Y(b.mean_valence).toFixed(1)}`).join(' ')}"/>`
+    : '';
+
+  // Selective direct labels: the two extremes only. A number on every dot is noise.
+  const hi = pts.reduce((a,b)=>b.valence>a.valence?b:a);
+  const lo = pts.reduce((a,b)=>b.valence<a.valence?b:a);
+  const label = (p, dy) => {
+    // Placed by measured left edge rather than by text-anchor, so the label cannot
+    // overflow the plot no matter how the renderer treats the anchor. 5.8px/char is
+    // a safe over-estimate for Inter at 10.5px.
+    const text = `${p.filename.slice(0,22)} ${VAL(p.valence)}`;
+    const w = text.length * 5.8;
+    const x = X(p.started_at);
+    const tx = Math.max(x0, Math.min(x + 11, x1 - w));
+    return `<text class="dlabel" x="${tx.toFixed(1)}" y="${(Y(p.valence)+dy).toFixed(1)}">${esc(text)}</text>`;
+  };
+  const labels = hi === lo ? '' : label(hi, -12) + label(lo, 16);
+
+  const dots = pts.map((p,i) => {
+    const cx = X(p.started_at).toFixed(1), cy = Y(p.valence).toFixed(1), c = polColor(p.valence);
+    // Low confidence is marked by shape, not by a lighter colour — a faded dot on a
+    // value scale is indistinguishable from a dot nearer the neutral midpoint.
+    const face = p.low_confidence
+      ? `<circle class="pt" cx="${cx}" cy="${cy}" r="5" fill="var(--panel)" stroke="${c}"/>`
+      : `<circle class="pt" cx="${cx}" cy="${cy}" r="5" fill="${c}"/>`;
+    const aria = `${p.filename}, ${p.started_iso}, valence ${VAL(p.valence)}, ${p.label}, confidence ${p.confidence}`;
+    return `<g>${face}<circle class="hit" cx="${cx}" cy="${cy}" r="13" data-i="${i}"
+      tabindex="0" role="button" aria-label="${esc(aria)}"/>
+      <circle class="ptring" cx="${cx}" cy="${cy}" r="9"/></g>`;
+  }).join('');
+
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img"
+    aria-label="Sentiment valence over time, ${pts.length} recordings. A table view of the same data is one button away.">
+    ${grid}${ticks}${mean}${labels}${dots}</svg>`;
+}
+
+function wireChart(){
+  const wrap = $('#chartwrap'), tip = $('#tip');
+  if (!wrap) return;
+  const showTip = el => {
+    const p = TREND.points[+el.dataset.i];
+    const box = el.getBoundingClientRect(), ref = wrap.getBoundingClientRect();
+    tip.innerHTML = `<b>${esc(p.filename)}</b>
+      <div class="faint">${p.started_iso} · ${p.duration_min} min${p.tier?' · '+esc(p.tier):''}</div>
+      <div style="margin-top:5px">${esc(p.label)} · valence <b>${VAL(p.valence)}</b>
+        · energy ${p.energy===null?'—':p.energy.toFixed(2)}</div>
+      <div class="faint">confidence ${p.confidence===null?'—':p.confidence.toFixed(2)}${p.low_confidence?' — low, excluded from the trend line':''}</div>
+      ${p.drivers.length?`<div class="faint" style="margin-top:5px;font-style:italic">${esc(p.drivers.slice(0,2).join('; '))}</div>`:''}
+      <div class="faint" style="margin-top:5px">click to open</div>`;
+    tip.style.opacity = '1';
+    // Flip to the left of the point when it would otherwise run off the right edge.
+    const cx = box.left - ref.left + box.width/2, cy = box.top - ref.top;
+    tip.style.left = Math.max(0, Math.min(cx + 14, wrap.clientWidth - tip.offsetWidth - 4)) + 'px';
+    tip.style.top  = Math.max(0, cy - tip.offsetHeight - 6) + 'px';
+  };
+  const hideTip = () => { tip.style.opacity = '0'; };
+
+  wrap.addEventListener('pointerover', e => { if (e.target.classList.contains('hit')) showTip(e.target); });
+  wrap.addEventListener('pointerout',  e => { if (e.target.classList.contains('hit')) hideTip(); });
+  wrap.addEventListener('focusin',     e => { if (e.target.classList.contains('hit')) showTip(e.target); });
+  wrap.addEventListener('focusout', hideTip);
+  wrap.addEventListener('click', e => {
+    if (e.target.classList.contains('hit')) openRec(TREND.points[+e.target.dataset.i].id);
+  });
+  wrap.addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('hit')){
+      e.preventDefault(); openRec(TREND.points[+e.target.dataset.i].id);
+    }
+  });
+}
+
+function trendTable(t){
+  return `<div style="overflow-x:auto;margin-top:14px"><table><thead><tr>
+    <th>Recorded</th><th>Recording</th><th>Minutes</th><th>Valence</th><th>Tone</th>
+    <th>Energy</th><th>Confidence</th><th>Read from</th></tr></thead><tbody>
+    ${[...t.points].reverse().map(p=>`<tr>
+      <td class="mono faint">${p.started_iso}</td>
+      <td><a href="#" onclick="openRec('${p.id}');return false">${esc(p.filename)}</a></td>
+      <td class="mono">${p.duration_min}</td>
+      <td class="mono"><b>${VAL(p.valence)}</b></td>
+      <td>${esc(p.label)}</td>
+      <td class="mono">${p.energy===null?'—':p.energy.toFixed(2)}</td>
+      <td class="mono">${p.confidence===null?'—':p.confidence.toFixed(2)}${p.low_confidence?' <span class="chip">low</span>':''}</td>
+      <td class="faint">${esc(p.drivers.slice(0,2).join('; '))}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+
+// ---------------------------------------------------------------- settings + run
+async function loadSettings(){
+  const s = await api('/api/settings');
+  const yn = (ok,d) => `<span class="chip ${ok?'good':'bad'}">${ok?'ok':'problem'}</span> <span class="muted">${esc(d)}</span>`;
+  $('#settings').innerHTML = `<div class="card"><table>
+    <tr><td>Archive</td><td class="mono">${esc(s.archive_root)}</td></tr>
+    <tr><td>Cognitive stack corpus</td><td class="mono">${esc(s.stack_dir)}</td></tr>
+    <tr><td>Notes</td><td class="mono">${s.notes_dir?esc(s.notes_dir):'<span class="faint">not configured</span>'}</td></tr>
+    <tr><td>Plaud account</td><td class="mono">${esc(s.email||'not logged in')}</td></tr>
+    <tr><td>Transcription</td><td>${yn(s.transcribe.ok, s.transcribe.detail)}</td></tr>
+    <tr><td>Language model</td><td>${yn(s.llm.ok, s.llm.label+' — '+s.llm.detail)}
+      ${s.llm.local?'<span class="chip good">local</span>':'<span class="chip warn">remote — transcripts leave this machine</span>'}</td></tr>
+    <tr><td>Prune age floor</td><td>${s.prune_min_age_days} days</td></tr>
+  </table></div>`;
+}
+
+let runTimer = null;
+async function startRun(){
+  try { await jpost('/api/run', {}); } catch(e){ /* already running */ }
+  pollRun();
+}
+async function pollRun(){
+  const r = await api('/api/run');
+  const btn = $('#syncBtn');
+  if (r.active){
+    btn.textContent = 'Syncing…'; btn.disabled = true;
+    $('#runBox').innerHTML = `<div class="card"><b>Sync running</b>
+      <pre class="mono" style="max-height:170px;overflow:auto;font-size:12px;background:var(--panel-2);padding:10px;border-radius:6px">${esc(r.log.join('\n'))}</pre></div>`;
+    clearTimeout(runTimer); runTimer = setTimeout(pollRun, 2000);
+  } else {
+    btn.textContent = 'Sync now'; btn.disabled = false;
+    if (r.finished){
+      $('#runBox').innerHTML = `<div class="card"><b>Sync finished</b> ${r.rc===0?'<span class="chip good">ok</span>':'<span class="chip bad">exit '+r.rc+'</span>'}
+        <pre class="mono" style="max-height:150px;overflow:auto;font-size:12px;background:var(--panel-2);padding:10px;border-radius:6px">${esc(r.log.slice(-25).join('\n'))}</pre>
+        <button class="btn sm" onclick="document.getElementById('runBox').innerHTML=''">dismiss</button></div>`;
+      show(VIEW);
+      loadFreshness();  // a run is exactly what changes the answer
+    }
+  }
+}
+
+boot(); pollRun();
+</script>
+</body>
+</html>

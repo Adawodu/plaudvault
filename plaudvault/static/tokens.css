@@ -1,0 +1,81 @@
+/* Stack Console — design tokens · gold, obsidian, ivory.
+   Editorial console, gold reserved for signal. Light & dark are equal.
+   Semantic names per the style guide, with legacy aliases mapped for existing components.
+   Light is the default; dark follows OS preference and an explicit data-theme override wins. */
+
+:root{
+  /* ── LIGHT (ivory) ── */
+  --background:#f3ead6;         /* page canvas — warm ivory */
+  --panel:#fdfbf6;             /* elevated cards — near-white lift off the ivory */
+  --panel-2:#ede3cd;           /* inset surfaces, chips */
+  --foreground:#252016;        /* obsidian body text */
+  --muted-foreground:#786e57;  /* metadata, captions */
+  --faint:#a2977c;             /* faintest labels */
+  --rail:#e0d5ba;              /* dividers, borders */
+  --rail-2:#cfc2a1;
+  --gold:#8a5a1b;             /* THE accent — signal only (AA on ivory at 14px+/non-body) */
+  --gold-2:#a0691f;           /* accent hover */
+  --gold-soft:#efe4c8;        /* accent surfaces */
+  --gold-foreground:#6e4715;  /* body-weight gold text sits on --gold-soft */
+  --success:#2f855a;          /* demonstrated */
+  --success-soft:#e3f1e7;
+  --warn:#a9741a;             /* reflected */
+  --warn-soft:#f2e6c9;
+  --destructive:#b23a2a;      /* errors, rejected */
+  --destructive-soft:#f6e1dc;
+
+  /* ── diverging polarity scale (sentiment valence) ──
+     Two hues that read as opposite plus a neutral gray midpoint, held at near-constant
+     lightness so the arms differ by chroma, not by fading out. Teal rather than green
+     for the positive pole on purpose: a green/red pair collapses under the two most
+     common colour-vision deficiencies, and these poles stay 12.5-15.6 apart in OKLab
+     under simulated protanopia and deuteranopia. Every step clears 3:1 on --panel in
+     both modes; position on the axis and the table view carry the value regardless. */
+  --pol-neg-2:#a8412c; --pol-neg-1:#a4705f; --pol-0:#7f7563;
+  --pol-pos-1:#4a7f92; --pol-pos-2:#1f6f8b;
+
+  /* type */
+  --font-display:"Instrument Serif",ui-serif,Georgia,"Times New Roman",serif;
+  --font-sans:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+
+  /* legacy aliases (existing components reference these) */
+  --bg:var(--background); --surface:var(--panel); --surface-2:var(--panel-2);
+  --ink:var(--foreground); --muted:var(--muted-foreground); --line:var(--rail); --line-2:var(--rail-2);
+  --accent:var(--gold); --accent-2:var(--gold-2); --accent-soft:var(--gold-soft);
+  --good:var(--success); --good-soft:var(--success-soft);
+  --serif:var(--font-display); --sans:var(--font-sans); --mono:var(--font-mono);
+}
+
+/* ── DARK (obsidian) — OS preference, unless data-theme overrides ── */
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --background:#1c1810; --panel:#262015; --panel-2:#2f2818; --foreground:#ece3d0;
+    --muted-foreground:#a99e85; --faint:#7d735b; --rail:#383018; --rail-2:#473d22;
+    --gold:#e0b45c; --gold-2:#eac06e; --gold-soft:#3a2e12; --gold-foreground:#e8c982;
+    --success:#5fbf8e; --success-soft:#173a28; --warn:#d9a445; --warn-soft:#3a2f14;
+    --destructive:#da6350; --destructive-soft:#3a211c;
+    /* re-stepped against the obsidian surface, not flipped */
+    --pol-neg-2:#eb937a; --pol-neg-1:#cb9585; --pol-0:#a89d84;
+    --pol-pos-1:#84b7ca; --pol-pos-2:#63b5d3;
+  }
+}
+:root[data-theme="dark"]{
+  --background:#1c1810; --panel:#262015; --panel-2:#2f2818; --foreground:#ece3d0;
+  --muted-foreground:#a99e85; --faint:#7d735b; --rail:#383018; --rail-2:#473d22;
+  --gold:#e0b45c; --gold-2:#eac06e; --gold-soft:#3a2e12; --gold-foreground:#e8c982;
+  --success:#5fbf8e; --success-soft:#173a28; --warn:#d9a445; --warn-soft:#3a2f14;
+  --destructive:#da6350; --destructive-soft:#3a211c;
+  --pol-neg-2:#eb937a; --pol-neg-1:#cb9585; --pol-0:#a89d84;
+  --pol-pos-1:#84b7ca; --pol-pos-2:#63b5d3;
+}
+
+/* ── settings presets · gold intensity + panel contrast (default = standard) ── */
+:root[data-gold="subtle"]{--gold:#9c7433}
+:root[data-gold="bold"]{--gold:#754708}
+:root[data-theme="dark"][data-gold="subtle"]{--gold:#c9a75d}
+:root[data-theme="dark"][data-gold="bold"]{--gold:#f2c869}
+:root[data-contrast="soft"]{--panel:#f8f2e4;--rail:#e7ddc6}
+:root[data-contrast="high"]{--panel:#fffdf9;--rail:#cbbb96}
+:root[data-theme="dark"][data-contrast="soft"]{--panel:#211c14;--rail:#2f2815}
+:root[data-theme="dark"][data-contrast="high"]{--panel:#2f2817;--rail:#473d22}
