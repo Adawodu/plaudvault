@@ -94,8 +94,15 @@ def _plist_sync(exe: str, logs: Path, hours: list[int]) -> str:
 """
 
 
-def _launchctl(*args: str) -> None:
-    subprocess.run(["launchctl", *args], capture_output=True)
+def _launchctl(*args: str) -> tuple[bool, str]:
+    p = subprocess.run(["launchctl", *args], capture_output=True, text=True)
+    return p.returncode == 0, (p.stderr or p.stdout or "").strip()
+
+
+def _loaded(label: str) -> bool:
+    """Ask launchd whether the job actually exists, rather than trusting bootstrap."""
+    ok, _ = _launchctl("print", f"gui/{os.getuid()}/{label}")
+    return ok
 
 
 def _install_macos(hours: list[int]) -> int:
@@ -104,17 +111,34 @@ def _install_macos(hours: list[int]) -> int:
     agents = _launch_agents()
     agents.mkdir(parents=True, exist_ok=True)
 
+    failed = []
     for label, body in (
         (LABEL_WEB, _plist_web(exe, logs)),
         (LABEL_SYNC, _plist_sync(exe, logs, hours)),
     ):
         path = agents / f"{label}.plist"
+        # bootout is expected to fail when nothing is loaded yet; only bootstrap matters.
         _launchctl("bootout", f"gui/{os.getuid()}/{label}")
         path.write_text(body)
-        _launchctl("bootstrap", f"gui/{os.getuid()}", str(path))
-        print(f"  installed {path}")
+        ok, err = _launchctl("bootstrap", f"gui/{os.getuid()}", str(path))
+        # Writing the plist is not installing it. Verify with launchd itself, and retry
+        # once — bootstrap immediately after a write occasionally loses the race, and
+        # reporting a phantom success leaves a "scheduled" sync that never runs.
+        if not _loaded(label):
+            ok, err = _launchctl("bootstrap", f"gui/{os.getuid()}", str(path))
+        if _loaded(label):
+            print(f"  installed {path}")
+        else:
+            failed.append((label, err))
+            print(f"  FAILED to load {label}: {err or 'launchctl gave no reason'}")
 
-    print(f"\n  console: always on, restarted if it exits")
+    if failed:
+        print("\n  Some units did not load. Fix and re-run, or bootstrap by hand:")
+        for label, _ in failed:
+            print(f"    launchctl bootstrap gui/{os.getuid()} {agents}/{label}.plist")
+        return 1
+
+    print("\n  console: always on, restarted if it exits")
     print(f"  sync:    {', '.join(f'{h:02d}:00' for h in hours)} daily")
     print(f"  logs:    {logs}/plaudvault-*.log")
     return 0
