@@ -89,11 +89,56 @@ def _parse_json_array(raw: str) -> list[dict]:
     return [d for d in data if isinstance(d, dict) and (d.get("text") or "").strip()]
 
 
+# Words too common to prove anything about where a quote came from.
+_STOP = frozenset(
+    "the a an and or of to in for on is are was were be been i you he she it we they "
+    "that this with as at by from need needs going gonna so like just have has had do "
+    "does did will would can could my your our their".split()
+)
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", (text or "").lower())).strip()
+
+
+def _grounded(quote: str, chunk_norm: str) -> bool:
+    """Can this quote be traced back to the text the model was actually given?
+
+    A few-shot example is the one thing in the prompt that looks exactly like a
+    correct answer, and a small model will occasionally return it instead of reading
+    the transcript — producing an action with a citation to a conversation that never
+    happened. That is worse than a wrong action: the quote is the thing you would
+    check it against, so a fabricated quote defeats its own audit.
+
+    Verbatim matching is too strict, because models legitimately elide and reword
+    ("...", "[have them]"), and on real data that would have discarded 23 sound
+    actions to catch 2 bad ones. So a quote passes if a 40-character run of it appears
+    verbatim, or if most of its content words do. Both leaked examples fail; every
+    genuine paraphrase in the corpus passes.
+    """
+    q = _norm(quote)
+    if len(q) < 12:
+        return True  # nothing to verify against; the text itself is judged elsewhere
+    if q in chunk_norm:
+        return True
+    if any(q[i : i + 40] in chunk_norm for i in range(0, max(1, len(q) - 40), 10)):
+        return True
+    words = [w for w in q.split() if w not in _STOP and len(w) > 3]
+    if not words:
+        return True
+    return sum(w in chunk_norm for w in words) / len(words) >= 0.6
+
+
 def extract_from_text(cfg: Config, text: str) -> list[dict]:
     found: list[dict] = []
+    dropped = 0
     for chunk in _chunk(text):
         raw = _generate(cfg, EXTRACT_PROMPT.format(chunk=chunk))
+        chunk_norm = _norm(chunk)
         for item in _parse_json_array(raw):
+            if not _grounded(str(item.get("quote") or ""), chunk_norm):
+                dropped += 1
+                continue
             kind = str(item.get("kind") or "commitment").strip().lower()
             if kind not in ("commitment", "suggestion"):
                 kind = "commitment"
@@ -116,6 +161,9 @@ def extract_from_text(cfg: Config, text: str) -> list[dict]:
             continue
         seen.add(key)
         unique.append(f)
+    if dropped:
+        # Never silent: a filter you can't see is one you stop trusting.
+        print(f"    [dropped {dropped} with a quote not traceable to the transcript]")
     return unique
 
 
