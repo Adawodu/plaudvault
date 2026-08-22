@@ -20,48 +20,84 @@ from .llm import available
 from .summarize import _chunk, _generate
 from .transcribe import read_transcript
 
+# Two prompts rather than one prompt plus a filter. Asking for suggestions and then
+# discarding them still spends the model's attention on inventing them, and a category
+# that is merely *mentioned* is a category the model will populate. When suggestions are
+# off, the concept does not appear anywhere in the prompt — not in the rules, not in the
+# schema, not in the worked example.
+_RULES_COMMITMENTS_ONLY = """One thing counts, and only one:
+- "commitment" — a person actually said they would do it ("I'll send it Friday",
+  "I need to email Herry", "let me sort that out tomorrow")
+
+This is a strict test and most of a conversation fails it. Do NOT list something
+because it sounds useful, because it was discussed at length, because it is a problem
+worth solving, or because the conversation implies it would be a good next step. If
+nobody said they would do it, it does not go on the list. Topics are not commitments.
+Ideas are not commitments. Things that already happened during the conversation are not
+commitments."""
+
+_RULES_WITH_SUGGESTIONS = """Two kinds count:
+- "commitment" — someone said they would do it ("I'll send it Friday", "I need to email Herry")
+- "suggestion" — the discussion clearly implies a useful next step, even if nobody
+  explicitly committed to it"""
+
+_KIND_FIELD_COMMITMENTS_ONLY = '"kind": "commitment",'
+_KIND_FIELD_WITH_SUGGESTIONS = '"kind": "commitment" or "suggestion",'
+
+_EXAMPLE_COMMITMENTS_ONLY = """[{{"text":"Draft the vendor agreement and send it over","kind":"commitment","owner":"Speaker 1","quote":"I'll draft the vendor agreement by Friday and send it over","at":"00:01:10"}}]
+
+Note what was skipped. The weather remark is small talk. The scattered renewal dates are
+a real problem and consolidating them would obviously help — but nobody said they would
+do it, so it is not a commitment and does not appear."""
+
+_EXAMPLE_WITH_SUGGESTIONS = """[{{"text":"Draft the vendor agreement and send it over","kind":"commitment","owner":"Speaker 1","quote":"I'll draft the vendor agreement by Friday and send it over","at":"00:01:10"}},
+ {{"text":"Consolidate the renewal dates into one source","kind":"suggestion","owner":"","quote":"The renewal dates are scattered across three spreadsheets","at":"00:02:40"}}]
+
+Note what was skipped: the weather remark is small talk, so it produced nothing."""
+
 EXTRACT_PROMPT = """Read this conversation transcript and list the things that should end up
 on a to-do list.
 
-Two kinds count:
-- "commitment" — someone said they would do it ("I'll send it Friday", "I need to email Herry")
-- "suggestion" — the discussion clearly implies a useful next step, even if nobody
-  explicitly committed to it
+{rules}
 
 Return a JSON array. Each element:
-{{"text": "the action, imperative, one line",
-  "kind": "commitment" or "suggestion",
+{{{{"text": "the action, imperative, one line",
+  {kind_field}
   "owner": "who would do it, or empty string if unclear",
-  "quote": "the transcript line it came from",
-  "at": "the [HH:MM:SS] timestamp of that line"}}
+  "quote": "the transcript line it came from, copied exactly",
+  "at": "the [HH:MM:SS] timestamp of that line"}}}}
 
 Here is a worked example.
 
 TRANSCRIPT:
 [00:01:10] Okay, on the billing work, I'll draft the vendor agreement by Friday and send it over.
-[00:01:32] And I need to email Dana to set up the review call.
 [00:02:05] Yeah, the weather has been strange lately.
 [00:02:40] The renewal dates are scattered across three spreadsheets, it's a mess.
 
 OUTPUT:
-[{{"text":"Draft the vendor agreement and send it over","kind":"commitment","owner":"Speaker 1","quote":"I'll draft the vendor agreement by Friday and send it over","at":"00:01:10"}},
- {{"text":"Email Dana to set up the review call","kind":"commitment","owner":"Speaker 1","quote":"And I need to email Dana to set up the review call","at":"00:01:32"}},
- {{"text":"Consolidate the renewal dates into one source","kind":"suggestion","owner":"","quote":"The renewal dates are scattered across three spreadsheets","at":"00:02:40"}}]
-
-Note what was skipped: the weather remark is small talk, so it produced nothing.
+{example}
 
 Guidance: skip small talk and pleasantries. This transcript comes from automatic speech
 recognition, so if a line is too garbled to understand, skip it rather than guessing at
-it. Plenty of conversations contain nothing actionable — if this is one of them, return
-an empty array [] rather than manufacturing something.
+it. Every "quote" must be copied from the transcript below — never from this example.
+Plenty of conversations contain nothing actionable — if this is one of them, return an
+empty array [] rather than manufacturing something.
 
 Return ONLY the JSON array, no prose and no code fences.
 
 TRANSCRIPT:
-{chunk}
+{{chunk}}
 
 OUTPUT:
 """
+
+
+def build_prompt(*, suggestions: bool) -> str:
+    return EXTRACT_PROMPT.format(
+        rules=_RULES_WITH_SUGGESTIONS if suggestions else _RULES_COMMITMENTS_ONLY,
+        kind_field=_KIND_FIELD_WITH_SUGGESTIONS if suggestions else _KIND_FIELD_COMMITMENTS_ONLY,
+        example=_EXAMPLE_WITH_SUGGESTIONS if suggestions else _EXAMPLE_COMMITMENTS_ONLY,
+    )
 
 # Brackets optional: the model echoes "[00:01:10]" from the transcript in `quote`,
 # but returns a bare "00:01:10" in `at`.
@@ -129,11 +165,14 @@ def _grounded(quote: str, chunk_norm: str) -> bool:
     return sum(w in chunk_norm for w in words) / len(words) >= 0.6
 
 
-def extract_from_text(cfg: Config, text: str) -> list[dict]:
+def extract_from_text(cfg: Config, text: str, *, suggestions: bool | None = None) -> list[dict]:
+    if suggestions is None:
+        suggestions = cfg.extract_suggestions
+    prompt = build_prompt(suggestions=suggestions)
     found: list[dict] = []
-    dropped = 0
+    dropped = skipped_kind = 0
     for chunk in _chunk(text):
-        raw = _generate(cfg, EXTRACT_PROMPT.format(chunk=chunk))
+        raw = _generate(cfg, prompt.format(chunk=chunk))
         chunk_norm = _norm(chunk)
         for item in _parse_json_array(raw):
             if not _grounded(str(item.get("quote") or ""), chunk_norm):
@@ -142,6 +181,11 @@ def extract_from_text(cfg: Config, text: str) -> list[dict]:
             kind = str(item.get("kind") or "commitment").strip().lower()
             if kind not in ("commitment", "suggestion"):
                 kind = "commitment"
+            # Backstop. The prompt never mentions suggestions when they are off, but a
+            # model that volunteers one anyway must not slip onto the board sideways.
+            if kind == "suggestion" and not suggestions:
+                skipped_kind += 1
+                continue
             found.append(
                 {
                     "text": str(item["text"]).strip()[:500],
@@ -161,13 +205,22 @@ def extract_from_text(cfg: Config, text: str) -> list[dict]:
             continue
         seen.add(key)
         unique.append(f)
+    # Never silent: a filter you can't see is one you stop trusting.
     if dropped:
-        # Never silent: a filter you can't see is one you stop trusting.
         print(f"    [dropped {dropped} with a quote not traceable to the transcript]")
+    if skipped_kind:
+        print(f"    [dropped {skipped_kind} suggestion(s) — commitments only; --suggestions to keep]")
     return unique
 
 
-def run(cfg: Config, store: Store, *, limit: int | None = None, force: bool = False) -> dict:
+def run(
+    cfg: Config,
+    store: Store,
+    *,
+    limit: int | None = None,
+    force: bool = False,
+    suggestions: bool | None = None,
+) -> dict:
     rows = store.all() if force else [
         r for r in store.all() if r["transcript_path"] and not r["extracted_at"]
     ]
@@ -179,7 +232,9 @@ def run(cfg: Config, store: Store, *, limit: int | None = None, force: bool = Fa
     ok, why = available(cfg)
     if not ok:
         raise RuntimeError(f"language model unavailable — {why}")
-    print(f"  {len(rows)} recordings to scan for commitments · {cfg.llm_label}")
+    want = cfg.extract_suggestions if suggestions is None else suggestions
+    scope = "commitments and suggestions" if want else "commitments"
+    print(f"  {len(rows)} recordings to scan for {scope} · {cfg.llm_label}")
 
     for i, row in enumerate(rows, 1):
         text = read_transcript(cfg, row["id"])
@@ -192,7 +247,7 @@ def run(cfg: Config, store: Store, *, limit: int | None = None, force: bool = Fa
                 for a in store.actions(recording_id=row["id"])
             }
             n = 0
-            for item in extract_from_text(cfg, text):
+            for item in extract_from_text(cfg, text, suggestions=suggestions):
                 key = re.sub(r"[^a-z0-9 ]", "", item["text"].lower())[:60]
                 if key in existing:
                     continue

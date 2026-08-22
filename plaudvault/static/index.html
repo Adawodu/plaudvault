@@ -271,11 +271,18 @@ audio{width:100%;margin:10px 0}
 
     <h2>Actions</h2>
     <div class="card">
-      <p>Each recording is scanned for two kinds of item:</p>
-      <p><span class="chip warn">commitment</span> someone said they would do it &nbsp;
-         <span class="chip">suggestion</span> the conversation implies a useful next step</p>
-      <p>Both arrive as <b>proposed</b> and do nothing until you accept them. Many recordings
-      contain nothing actionable — an empty list is a normal, correct answer, not a failure.</p>
+      <p>Each recording is scanned for <span class="chip warn">commitment</span> — things a
+      person actually said they would do. They arrive as <b>proposed</b> and do nothing until
+      you accept them. Many recordings contain nothing actionable — an empty list is a normal,
+      correct answer, not a failure.</p>
+      <p><span class="chip">suggestion</span> — implied next steps — is off by default. A local
+      model is bad at that judgment: on this archive it produced 198 suggestions against 57
+      commitments, mostly topic summaries rather than tasks. Turn it on with
+      <span class="mono">plaudctl extract --suggestions</span> if you want them.</p>
+      <p>Every proposal carries the transcript line it came from, and that line is verified
+      against the recording before the action reaches this board. A quote that can't be traced
+      is discarded — the quote is how you check the action, so an invented one is worse than
+      no action at all.</p>
       <p>Accepting asks for an <b>intent</b>: what this is supposed to achieve. That is what
       the outcome score is later judged against. Finishing a task and the task having
       worked are different things, and only one of them is worth measuring.</p>

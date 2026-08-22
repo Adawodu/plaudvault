@@ -135,14 +135,41 @@ recordings to *local* is the difference between an archive and a surveillance co
 
 ## Actions
 
-`plaudctl extract` reads each transcript and proposes two kinds of item:
+`plaudctl extract` reads each transcript and proposes **commitments** — things a person
+actually said they would do. Everything arrives as `proposed` and does nothing until you
+accept it. Plenty of recordings contain nothing actionable, and the extractor returns an
+empty list for those rather than manufacturing work.
 
-- **commitment** — someone said they would do it
-- **suggestion** — the discussion implies a useful next step
+`--suggestions` (or `extract_suggestions = true`) also asks for implied next steps.
+It is off by default because a small local model is bad at the judgment it requires:
+on a real 30-hour corpus it returned **198 suggestions against 57 commitments**, and the
+suggestions were largely topic summaries — *"Discuss the app's features"*, *"Share the
+screen to show the app concept"* (which had already happened), *"Secure and compliant
+infrastructure for managing IP"* (not an action at all). A 255-item board is one you
+stop opening, and a board nobody opens measures nothing.
 
-Everything arrives as `proposed` and does nothing until you accept it. Plenty of
-recordings contain nothing actionable, and the extractor returns an empty list for
-those rather than manufacturing work.
+Suggestions are removed from the prompt entirely rather than filtered from the response.
+A category that is merely *mentioned* is one the model will populate, so when they are
+off the word does not appear in the rules, the schema, or the worked example.
+
+### Every quote is checked against the transcript
+
+Each proposal carries the line it came from, and that line is verified against the text
+the model was actually given. This is not paranoia: on the corpus above, two proposals
+were verbatim copies of the prompt's own worked example — an action to *"Schedule a
+review call with Dana"* quoting *"I need to email Dana to set up the review call"*, when
+the word "Dana" appears in none of the recordings. A small model will sometimes return
+the example instead of reading the input.
+
+That failure mode is worse than a wrong action. The quote exists so you can check the
+action against the recording, so a fabricated quote defeats the audit it is there to
+support — it reads as evidence and is not.
+
+Verbatim matching alone is too strict, because models legitimately elide and reword; on
+the real corpus it would have discarded 23 sound actions to catch 2 bad ones. A quote
+passes if a 40-character run appears verbatim, or if at least 60% of its content words
+do. That keeps 253 of 255 and drops exactly the two leaks. Drops are printed, never
+silent.
 
 Accepting asks for an **intent**: what this is supposed to achieve. Outcome scoring
 later is judged against exactly that, because finishing a task and the task having

@@ -73,6 +73,11 @@ DEFAULTS: dict = {
     "openai_api_key_env": "OPENAI_API_KEY",
 
     # ---- behaviour --------------------------------------------------------
+    # Extract only what someone actually committed to. Turning this on also asks for
+    # implied next steps, which a small local model produces in bulk: on a real 30-hour
+    # corpus it returned 198 suggestions against 57 commitments, and the suggestions
+    # were mostly topic summaries. A board nobody opens measures nothing.
+    "extract_suggestions": False,
     "summarize_min_seconds": 120,
     "prune_min_age_days": 14,
     "web_port": 8787,
@@ -102,6 +107,7 @@ class Config:
     openai_base_url: str
     openai_model: str
     openai_api_key_env: str
+    extract_suggestions: bool
     summarize_min_seconds: int
     prune_min_age_days: int
     web_port: int

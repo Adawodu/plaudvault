@@ -88,7 +88,8 @@ def cmd_notes(args, cfg) -> int:
 
 def cmd_extract(args, cfg) -> int:
     with Store(cfg.db_path) as store:
-        s = extract.run(cfg, store, limit=args.limit, force=args.force)
+        s = extract.run(cfg, store, limit=args.limit, force=args.force,
+                        suggestions=True if args.suggestions else None)
     print(f"\n  scanned {s['recordings']}, proposed {s['proposed']} actions, failed {s['failed']}")
     print("  review them in the console: plaudctl web")
     return 1 if s["failed"] else 0
@@ -280,7 +281,8 @@ def main(argv=None) -> int:
 
     def add(name, fn, help_):
         sp = sub.add_parser(name, help=help_)
-        sp.set_defaults(fn=fn, limit=None, force=False, yes=False, probe=False, cloud=False)
+        sp.set_defaults(fn=fn, limit=None, force=False, yes=False, probe=False, cloud=False,
+                        suggestions=False)
         return sp
 
     sp = add("login", cmd_login, "authenticate with Plaud (emailed one-time code)")
@@ -303,11 +305,15 @@ def main(argv=None) -> int:
         ("summarize", cmd_summarize, "summarize locally with Ollama"),
         ("sentiment", cmd_sentiment, "score the tone of transcripts (feeds the trend chart)"),
         ("notes", cmd_notes, "write/refresh Obsidian notes"),
-        ("extract", cmd_extract, "propose actions from transcripts (review in the console)"),
+        ("extract", cmd_extract, "propose commitments from transcripts (review in the console)"),
     ):
         sp = add(name, fn, help_)
         sp.add_argument("--limit", type=int)
         sp.add_argument("--force", action="store_true", help="redo already-processed items")
+
+    sub.choices["extract"].add_argument(
+        "--suggestions", action="store_true",
+        help="also propose implied next steps, not just stated commitments (noisy)")
 
     add("tier", cmd_tier, "reconcile PLAUD/stack/ with your triage decisions")
 
