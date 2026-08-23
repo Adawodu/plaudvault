@@ -181,7 +181,10 @@ audio{width:100%;margin:10px 0}
   </section>
 
   <section class="view" id="v-detail">
-    <button class="btn sm" onclick="show('inbox')">← back</button>
+    <div class="row spread" style="margin-bottom:4px">
+      <button class="btn sm" id="backBtn" onclick="goBack()">← back</button>
+      <div class="row" id="recNav"></div>
+    </div>
     <div id="detail"></div>
   </section>
 
@@ -271,6 +274,18 @@ audio{width:100%;margin:10px 0}
         <li><b>Work the Actions board</b> — accept what's real, complete it, score the outcome.</li>
         <li><b>Check Measures</b> — weekly, to see whether any of this is actually paying off.</li>
       </ol>
+    </div>
+
+    <h2>Moving between recordings</h2>
+    <div class="card">
+      <p>Open a recording and <b>← prev</b> / <b>next →</b> step through whatever list you came
+      from — the Inbox steps through untriaged recordings, search results step through the hits,
+      Trends steps through the chart in time order. The <span class="mono">←</span> and
+      <span class="mono">→</span> arrow keys do the same, except while you are typing or when the
+      audio player has focus, where the arrows scrub the audio instead.</p>
+      <p class="faint">The list is captured when you open the first recording and does not change
+      underneath you. Triaging something removes it from the live Inbox query, so a list that
+      recomputed as you worked would shift you forward and silently skip the next one.</p>
     </div>
 
     <h2>Triage: the three tiers</h2>
@@ -542,6 +557,7 @@ function recCard(r, showTier){
 
 async function loadInbox(){
   const rows = await api('/api/recordings?untriaged=true');
+  setNav(rows.map(r => r.id), 'Inbox', 'inbox');
   $('#inboxList').innerHTML = rows.length
     ? rows.map(r => recCard(r,false)).join('')
     : '<div class="empty">Inbox clear — every transcribed recording has been triaged.</div>';
@@ -550,6 +566,7 @@ async function loadInbox(){
 async function loadLibrary(){
   const t = $('#libTier').value, q = $('#libSearch').value;
   const rows = await api(`/api/recordings?${t?`tier=${t}&`:''}q=${encodeURIComponent(q)}`);
+  setNav(rows.map(r => r.id), q || t ? 'Library (filtered)' : 'Library', 'library');
   $('#libList').innerHTML = rows.length
     ? rows.map(r => recCard(r,true)).join('')
     : '<div class="empty">Nothing matches.</div>';
@@ -585,6 +602,7 @@ async function doSearch(){
     $('#qResults').innerHTML = '<div class="empty">Nothing close enough. Try describing it differently — this matches meaning, so a fuller phrase usually beats a keyword.</div>';
     return;
   }
+  setNav(r.hits.map(h => h.recording_id), `results for “${q}”`, 'search');
   $('#qResults').innerHTML = r.hits.map(h => `<div class="card">
       <div class="row spread">
         <div style="flex:1;min-width:260px">
@@ -603,9 +621,62 @@ async function doSearch(){
        result is "wrong" — compare them to each other, and expect quality to fall off after the first few.</p>`;
 }
 
+// ---------------------------------------------------------------- navigation
+// Prev/next follow the list you arrived from, not a global ordering: stepping through
+// the Inbox should visit untriaged recordings, and stepping through search results
+// should visit the hits. Each list view records its own order as it renders.
+//
+// The order is a snapshot on purpose. Triaging a recording removes it from the live
+// Inbox query, and recomputing would make the list shift under you mid-pass — you would
+// triage one, land two further on, and silently skip one.
+let NAV = {ids: [], label: '', from: 'inbox'};
+
+function setNav(ids, label, from){
+  NAV = {ids: [...new Set(ids)], label, from: from || VIEW};
+}
+
+function goBack(){ show(NAV.from || 'inbox'); }
+
+async function ensureNav(id){
+  if (NAV.ids.includes(id)) return;
+  // Opened from somewhere with no list context (a deep link, an action card).
+  // Fall back to the whole library, newest first, so the arrows still work.
+  try {
+    const rows = await api('/api/recordings');
+    setNav(rows.map(r => r.id), 'all recordings', NAV.from || 'library');
+  } catch(e){ /* leave nav empty; the bar just won't render */ }
+}
+
+function renderRecNav(id){
+  const i = NAV.ids.indexOf(id);
+  const bar = $('#recNav');
+  if (i < 0 || NAV.ids.length < 2){ bar.innerHTML = ''; return; }
+  const prev = NAV.ids[i-1], next = NAV.ids[i+1];
+  bar.innerHTML =
+    `<button class="btn sm" ${prev?`onclick="openRec('${prev}')"`:'disabled'} title="Previous (←)">← prev</button>`
+  + `<span class="faint mono" style="padding:0 4px">${i+1} / ${NAV.ids.length}${NAV.label?' · '+esc(NAV.label):''}</span>`
+  + `<button class="btn sm" ${next?`onclick="openRec('${next}')"`:'disabled'} title="Next (→)">next →</button>`;
+}
+
+// Arrow keys, but never while typing, never inside the dialog, and never when the audio
+// player has focus — there the arrows are the player's own scrub controls.
+document.addEventListener('keydown', e => {
+  if (VIEW !== 'detail' || !CUR) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if ($('#dlg').open) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+            || t.isContentEditable || t.tagName === 'AUDIO')) return;
+  const i = NAV.ids.indexOf(CUR.id);
+  if (i < 0) return;
+  if (e.key === 'ArrowLeft'  && NAV.ids[i-1]){ e.preventDefault(); openRec(NAV.ids[i-1]); }
+  if (e.key === 'ArrowRight' && NAV.ids[i+1]){ e.preventDefault(); openRec(NAV.ids[i+1]); }
+});
+
 // ---------------------------------------------------------------- detail
 let CUR = null;
 async function openRec(id, atMs){
+  await ensureNav(id);
   CUR = await api('/api/recordings/'+id);
   const r = CUR;
   const tr = esc(r.transcript).replace(/\[(\d{2}:\d{2}:\d{2})\]/g,
@@ -644,7 +715,9 @@ async function openRec(id, atMs){
       <div><h2>Transcript</h2><div class="transcript" id="tr">${tr}</div></div>
     </div>`;
   renderRecActions();
+  renderRecNav(id);
   show('detail');
+  window.scrollTo({top: 0});   // stepping to the next recording starts at its top
 
   // Arriving from a search hit: cue the audio to that moment and scroll the transcript
   // to it, rather than dropping the reader at the top of a ninety-minute conversation.
@@ -942,6 +1015,7 @@ function renderTrends(){
     A transcript has no tone of voice in it, so treat a single reading as a prompt to go and listen —
     the trend is the part worth reading.</p>`;
 
+  setNav(t.points.map(p => p.id), 'Trends', 'trends');
   if (!TREND_TABLE) wireChart();
 }
 
