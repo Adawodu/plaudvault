@@ -108,6 +108,25 @@ CREATE TABLE IF NOT EXISTS sentiment (
     scored_at     INTEGER NOT NULL
 );
 
+-- Transcript windows and their embeddings, for semantic search. The vector is raw
+-- float32 bytes; `dim` and `model` are stored so a change of embedding model is
+-- detectable rather than silently comparing incompatible vectors. Wholly derived from
+-- the transcripts — safe to delete and rebuild at any time.
+CREATE TABLE IF NOT EXISTS chunks (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id TEXT NOT NULL REFERENCES recordings(id),
+    idx          INTEGER NOT NULL,
+    start_ms     INTEGER,
+    text         TEXT NOT NULL,
+    vector       BLOB NOT NULL,
+    dim          INTEGER NOT NULL,
+    model        TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    UNIQUE(recording_id, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_rec   ON chunks(recording_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_model ON chunks(model);
+
 -- Append-only. Cycle time and adherence are computed from this, never from
 -- mutable columns, so history survives edits.
 CREATE TABLE IF NOT EXISTS action_events (
@@ -132,6 +151,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # declined to score one for being too short. Without that distinction, every run
     # would re-scan the same unscorable clips forever.
     ("recordings", "sentiment_at", "ALTER TABLE recordings ADD COLUMN sentiment_at INTEGER"),
+    ("recordings", "indexed_at", "ALTER TABLE recordings ADD COLUMN indexed_at INTEGER"),
 ]
 
 
@@ -350,6 +370,55 @@ class Store:
             "SELECT * FROM recordings WHERE sentiment_at IS NULL "
             "AND transcript_path IS NOT NULL ORDER BY started_at DESC"
         ).fetchall()
+
+    # ------------------------------------------------------------------ chunks
+
+    def set_chunks(self, rec_id: str, chunks: list[dict], vectors, *, model: str) -> None:
+        """Replace this recording's index. Whole-recording swap, in one transaction —
+        a half-reindexed recording would return hits pointing at the wrong moments."""
+        dim = int(vectors.shape[1])
+        now = int(time.time())
+        with self.db:
+            self.db.execute("DELETE FROM chunks WHERE recording_id = ?", (rec_id,))
+            self.db.executemany(
+                "INSERT INTO chunks (recording_id, idx, start_ms, text, vector, dim, model,"
+                " created_at) VALUES (?,?,?,?,?,?,?,?)",
+                [
+                    (rec_id, i, c["start_ms"], c["text"],
+                     vectors[i].astype("float32").tobytes(), dim, model, now)
+                    for i, c in enumerate(chunks)
+                ],
+            )
+
+    def chunks(self, *, model: str, include_excluded: bool = False) -> list[sqlite3.Row]:
+        q = (
+            "SELECT c.recording_id, c.start_ms, c.text, c.vector, r.filename, r.started_at,"
+            " t.tier FROM chunks c JOIN recordings r ON r.id = c.recording_id "
+            "LEFT JOIN triage t ON t.recording_id = c.recording_id WHERE c.model = ? "
+        )
+        if not include_excluded:
+            q += "AND (t.tier IS NULL OR t.tier != 'exclude') "
+        return self.db.execute(q + "ORDER BY c.recording_id, c.idx", (model,)).fetchall()
+
+    def needing_index(self, model: str) -> list[sqlite3.Row]:
+        """Transcribed recordings with no chunks for this model — or none at all.
+
+        Keyed on the model, so switching embedding models re-indexes rather than
+        leaving a corpus half in one vector space and half in another.
+        """
+        return self.db.execute(
+            "SELECT r.* FROM recordings r WHERE r.transcript_path IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.recording_id = r.id "
+            "AND c.model = ?) ORDER BY r.started_at DESC",
+            (model,),
+        ).fetchall()
+
+    def index_stats(self, model: str) -> dict:
+        row = self.db.execute(
+            "SELECT COUNT(*) n, COUNT(DISTINCT recording_id) recs FROM chunks WHERE model = ?",
+            (model,),
+        ).fetchone()
+        return {"chunks": row["n"], "recordings": row["recs"]}
 
     # ------------------------------------------------------------------ actions
 

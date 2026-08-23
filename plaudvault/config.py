@@ -72,6 +72,12 @@ DEFAULTS: dict = {
     # Name of the env var holding the key. The key itself is never stored here.
     "openai_api_key_env": "OPENAI_API_KEY",
 
+    # ---- semantic search --------------------------------------------------
+    # Embeddings always go through Ollama, even when the chat model is remote:
+    # indexing sends every sentence you have ever recorded, which is a far larger
+    # disclosure than summarizing one file, and should not follow that setting.
+    "embed_model": "nomic-embed-text",
+
     # ---- behaviour --------------------------------------------------------
     # Extract only what someone actually committed to. Turning this on also asks for
     # implied next steps, which a small local model produces in bulk: on a real 30-hour
@@ -107,6 +113,7 @@ class Config:
     openai_base_url: str
     openai_model: str
     openai_api_key_env: str
+    embed_model: str
     extract_suggestions: bool
     summarize_min_seconds: int
     prune_min_age_days: int

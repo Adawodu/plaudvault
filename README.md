@@ -175,6 +175,49 @@ Accepting asks for an **intent**: what this is supposed to achieve. Outcome scor
 later is judged against exactly that, because finishing a task and the task having
 worked are different things and only one is worth measuring.
 
+## Semantic search
+
+Keyword search fails on speech. You remember someone talking about being underpaid; the
+recording says *"they went below the range that I gave."* No substring links those, and
+the recording stays lost. Embeddings do.
+
+```bash
+plaudctl index                              # embed transcripts (idempotent)
+plaudctl search "feeling underpaid at work"
+```
+
+Or the **Search** tab in the console, where every hit opens the recording cued to the
+moment it was said.
+
+Indexing runs as part of `plaudctl run`. On a 30-hour archive it is ~650 passages and
+takes about **14 seconds**; search itself is one embedding call plus a matrix multiply.
+
+Deliberately brute force. 650 dot products against a 768-dimension vector is well under
+a millisecond in numpy — far below the cost of the single network call that embeds your
+query. A vector database would add a dependency, a daemon, and an index to corrupt, in
+exchange for nothing measurable at this scale. Vectors live as raw float32 in the same
+`manifest.sqlite` as everything else, so the archive stays one directory you can copy,
+and the index is rebuildable from transcripts at any time.
+
+Embeddings always go through **Ollama**, even if you point the chat model at a hosted
+API. Indexing sends every sentence you have ever recorded, which is a far larger
+disclosure than summarizing one file, and it should not silently inherit that setting.
+
+Recordings tiered `exclude` are left out, same as everywhere else, with a checkbox to
+include them. No single recording can take more than three slots on a page of results.
+
+**On the scores:** they are raw cosine similarity, not confidence. There is no value
+below which a result is "wrong" — this model puts most unrelated English text around
+0.3–0.5, so a top hit at 0.55 may still be the best the archive has. Compare hits to
+each other, and expect quality to fall off after the first few. The console shows the
+number rather than hiding it behind a verdict.
+
+`nomic-embed-text` is used with its documented `search_query:` / `search_document:`
+prefixes. Honest caveat: on a 4-query hand-built evaluation those prefixes improved mean
+rank (13 vs 15) but *reduced* top-3 hits (2/4 vs 3/4) — too small a sample to conclude
+anything. They are kept because they are the model's documented usage and Ollama's
+template (`{{ .Prompt }}`) confirms it does not add them itself.
+
 ## Tone, and the trend
 
 Every transcript is scored for emotional register as part of a normal run — on by

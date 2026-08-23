@@ -66,6 +66,20 @@ def _pending(store: Store, cfg: Config) -> list[dict]:
             "label": "scanned for commitments",
             "fix": "plaudctl extract",
         },
+        {
+            # Keyed on the current embedding model: changing it leaves the corpus half
+            # in one vector space and half in another, which reads as a silently
+            # incomplete search rather than an error.
+            "stage": "index",
+            "count": store.db.execute(
+                "SELECT COUNT(*) FROM recordings r WHERE r.transcript_path IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.recording_id = r.id "
+                "AND c.model = ?)",
+                (cfg.embed_model,),
+            ).fetchone()[0],
+            "label": "indexed for search",
+            "fix": "plaudctl index",
+        },
     ]
     if cfg.notes_dir is not None:
         items += [

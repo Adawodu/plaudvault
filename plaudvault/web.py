@@ -18,7 +18,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, freshness, llm, metrics, runlock, tiering, transcribe
+from . import auth, freshness, llm, metrics, runlock, search, tiering, transcribe
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -272,6 +272,23 @@ def sentiment_trend(
             include_low_confidence=low_confidence,
             include_excluded=excluded,
         )
+
+
+# ----------------------------------------------------------------------- search
+
+
+@app.get("/api/search")
+def semantic_search(q: str = "", k: int = Query(20, ge=1, le=100), excluded: bool = False):
+    cfg = _cfg()
+    with _store(cfg) as store:
+        stats = store.index_stats(cfg.embed_model)
+        ok, why = search.available(cfg)
+        if not q.strip():
+            return {"query": "", "hits": [], "index": stats, "ready": ok, "detail": why}
+        if not ok:
+            raise HTTPException(503, f"embedding model unavailable — {why}")
+        hits = search.search(cfg, store, q, k=k, include_excluded=excluded)
+        return {"query": q, "hits": hits, "index": stats, "ready": True, "detail": "ok"}
 
 
 # ----------------------------------------------------------------------- freshness

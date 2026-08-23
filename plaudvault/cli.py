@@ -6,8 +6,9 @@ import argparse
 import sys
 import time
 
-from . import (auth, extract, freshness, notes, prune, runlock, sentiment,
-               service, setup_wizard, summarize, sync, tiering, transcribe)
+from . import (auth, extract, freshness, notes, prune, runlock, search,
+               sentiment, service, setup_wizard, summarize, sync, tiering,
+               transcribe)
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -95,6 +96,30 @@ def cmd_extract(args, cfg) -> int:
     return 1 if s["failed"] else 0
 
 
+def cmd_index(args, cfg) -> int:
+    with Store(cfg.db_path) as store:
+        s = search.run(cfg, store, limit=args.limit, force=args.force)
+    print(f"\n  indexed {s['recordings']} recordings, {s['chunks']} chunks, failed {s['failed']}")
+    return 1 if s["failed"] else 0
+
+
+def cmd_search(args, cfg) -> int:
+    with Store(cfg.db_path) as store:
+        hits = search.search(cfg, store, args.query, k=args.limit or 10,
+                             include_excluded=args.excluded)
+    if not hits:
+        with Store(cfg.db_path) as store:
+            n = store.index_stats(cfg.embed_model)["chunks"]
+        print("  no matches." if n else "  nothing indexed yet — run: plaudctl index")
+        return 0
+    for h in hits:
+        print(f"\n  {h['score']:.3f}  {h['started_iso']}  {h['filename'][:52]}  [{h['at']}]")
+        body = " ".join(h["text"].split())
+        print(f"        {body[:200]}{'…' if len(body) > 200 else ''}")
+    print("\n  scores are cosine similarity, not confidence — compare them to each other")
+    return 0
+
+
 def cmd_tier(args, cfg) -> int:
     with Store(cfg.db_path) as store:
         s = tiering.sync(cfg, store)
@@ -157,6 +182,11 @@ def _run_stages(args, cfg) -> int:
     print("\n== extract ==")
     try:
         rc |= cmd_extract(args, cfg)
+    except RuntimeError as exc:
+        print(f"  [skip] {exc}")
+    print("\n== index ==")
+    try:
+        rc |= cmd_index(args, cfg)
     except RuntimeError as exc:
         print(f"  [skip] {exc}")
     print("\n== tier sync ==")
@@ -282,7 +312,7 @@ def main(argv=None) -> int:
     def add(name, fn, help_):
         sp = sub.add_parser(name, help=help_)
         sp.set_defaults(fn=fn, limit=None, force=False, yes=False, probe=False, cloud=False,
-                        suggestions=False)
+                        suggestions=False, excluded=False, query='')
         return sp
 
     sp = add("login", cmd_login, "authenticate with Plaud (emailed one-time code)")
@@ -314,6 +344,15 @@ def main(argv=None) -> int:
     sub.choices["extract"].add_argument(
         "--suggestions", action="store_true",
         help="also propose implied next steps, not just stated commitments (noisy)")
+
+    sp = add("index", cmd_index, "embed transcripts for semantic search")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--force", action="store_true", help="re-embed everything")
+
+    sp = add("search", cmd_search, "semantic search across your transcripts")
+    sp.add_argument("query")
+    sp.add_argument("--limit", type=int, help="how many hits (default 10)")
+    sp.add_argument("--excluded", action="store_true", help="also search excluded recordings")
 
     add("tier", cmd_tier, "reconcile PLAUD/stack/ with your triage decisions")
 

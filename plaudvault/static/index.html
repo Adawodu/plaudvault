@@ -130,6 +130,7 @@ audio{width:100%;margin:10px 0}
   </button>
   <nav>
     <button data-v="inbox" class="on">Inbox</button>
+    <button data-v="search">Search</button>
     <button data-v="library">Library</button>
     <button data-v="actions">Actions</button>
     <button data-v="trends">Trends</button>
@@ -148,6 +149,22 @@ audio{width:100%;margin:10px 0}
   <section class="view on" id="v-inbox">
     <p class="muted">Recordings that have been transcribed but not yet triaged. Decide what reaches the cognitive stack, and what can leave Plaud's cloud.</p>
     <div id="inboxList"></div>
+  </section>
+
+  <section class="view" id="v-search">
+    <p class="muted">Search by meaning, not by wording. Ask for <i>“feeling underpaid”</i> and it finds
+    <i>“they went below the range I gave”</i> — no shared words required. Each hit opens the recording
+    at the moment it was said.</p>
+    <div class="row" style="margin-bottom:6px">
+      <input id="qInput" placeholder="What do you half-remember?" style="max-width:520px"
+             autocomplete="off" enterkeyhint="search">
+      <button class="btn primary" onclick="doSearch()">Search</button>
+      <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12.5px">
+        <input type="checkbox" id="qExcl" style="width:auto"> include excluded
+      </label>
+    </div>
+    <div id="qIndex" class="faint" style="margin-bottom:14px"></div>
+    <div id="qResults"></div>
   </section>
 
   <section class="view" id="v-library">
@@ -290,6 +307,20 @@ audio{width:100%;margin:10px 0}
       Systems tab, which then tracks an adherence rate over time.</p>
     </div>
 
+    <h2>Search</h2>
+    <div class="card">
+      <p>The <b>Search</b> tab matches meaning, not wording. Ask for <i>"feeling underpaid"</i> and it
+      finds <i>"they went below the range that I gave"</i> — no shared words. Each hit opens the
+      recording cued to the moment it was said.</p>
+      <p>Every score is raw cosine similarity, <b>not</b> a confidence. There is no number below which
+      a result is wrong — most unrelated English sits around 0.3–0.5, so a best hit at 0.55 may still
+      be the closest thing you have. Compare hits to each other and expect quality to drop after the
+      first few.</p>
+      <p class="faint">Embeddings always run locally through Ollama, even if your summary model is a
+      hosted API — indexing sends every sentence you have ever recorded, and that shouldn't quietly
+      follow a setting made for summarizing one file. Excluded recordings are left out.</p>
+    </div>
+
     <h2>Tone and the trend</h2>
     <div class="card">
       <p>Every transcript is scored for emotional register as part of the normal run — no
@@ -347,7 +378,9 @@ plaudctl prune --yes      # actually sends it</pre>
     </div>
 
     <h2>Command line</h2>
-    <div class="card"><pre class="mono" style="margin:0;background:var(--panel-2);padding:12px;border-radius:6px;overflow-x:auto">plaudctl run          sync → transcribe → summarize → sentiment → notes → extract
+    <div class="card"><pre class="mono" style="margin:0;background:var(--panel-2);padding:12px;border-radius:6px;overflow-x:auto">plaudctl run          sync → transcribe → summarize → sentiment → notes → extract → index
+plaudctl search "…"   semantic search across every transcript
+plaudctl index        embed transcripts for search
 plaudctl fresh        is the vault up to date? (--cloud also asks Plaud)
 plaudctl sentiment    score tone for anything not yet scored
 plaudctl status       what is archived and what is pending
@@ -388,8 +421,9 @@ function show(v){
   VIEW = v;
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v'+'-'+v));
   document.querySelectorAll('nav button[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  ({inbox:loadInbox, library:loadLibrary, actions:loadActions, trends:loadTrends,
-    vault:loadVault, systems:loadSystems, measures:loadMeasures, help:loadSettings}[v]||(()=>{}))();
+  ({inbox:loadInbox, search:loadSearch, library:loadLibrary, actions:loadActions,
+    trends:loadTrends, vault:loadVault, systems:loadSystems, measures:loadMeasures,
+    help:loadSettings}[v]||(()=>{}))();
 }
 document.querySelectorAll('nav button[data-v]').forEach(b => b.onclick = () => show(b.dataset.v));
 
@@ -523,9 +557,55 @@ async function loadLibrary(){
 $('#libSearch').oninput = () => loadLibrary();
 $('#libTier').onchange = () => loadLibrary();
 
+// ---------------------------------------------------------------- search
+async function loadSearch(){
+  if (!$('#qIndex').dataset.loaded) await refreshIndexLine();
+  $('#qInput').focus();
+}
+async function refreshIndexLine(){
+  try {
+    const s = await api('/api/search?q=');
+    $('#qIndex').dataset.loaded = '1';
+    $('#qIndex').innerHTML = s.ready
+      ? `${s.index.chunks} passages indexed across ${s.index.recordings} recordings.`
+      : `<span class="chip bad">not ready</span> ${esc(s.detail)} — then run <span class="mono">plaudctl index</span>`;
+  } catch(e){ $('#qIndex').textContent = e.message; }
+}
+$('#qInput').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+$('#qExcl').onchange = () => { if ($('#qInput').value.trim()) doSearch(); };
+
+async function doSearch(){
+  const q = $('#qInput').value.trim();
+  if (!q) return;
+  $('#qResults').innerHTML = '<div class="empty">Searching…</div>';
+  let r;
+  try { r = await api(`/api/search?q=${encodeURIComponent(q)}&k=20${$('#qExcl').checked?'&excluded=true':''}`); }
+  catch(e){ $('#qResults').innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
+  if (!r.hits.length){
+    $('#qResults').innerHTML = '<div class="empty">Nothing close enough. Try describing it differently — this matches meaning, so a fuller phrase usually beats a keyword.</div>';
+    return;
+  }
+  $('#qResults').innerHTML = r.hits.map(h => `<div class="card">
+      <div class="row spread">
+        <div style="flex:1;min-width:260px">
+          <h3>${esc(h.filename)}</h3>
+          <div class="faint">${h.started_iso}${h.tier?' · '+esc(h.tier):''}</div>
+        </div>
+        <div class="row">
+          <span class="chip mono" title="cosine similarity — compare hits to each other, it is not a confidence">${h.score.toFixed(3)}</span>
+          ${h.at?`<span class="chip gold mono">${h.at}</span>`:''}
+          <button class="btn sm" onclick="openRec('${h.recording_id}',${h.start_ms||0})">Open at this moment</button>
+        </div>
+      </div>
+      <div style="margin-top:9px;line-height:1.6">${esc(h.text.replace(/\s+/g,' ').slice(0,420))}${h.text.length>420?'…':''}</div>
+    </div>`).join('')
+    + `<p class="faint">Scores are cosine similarity, not confidence. There is no value below which a
+       result is "wrong" — compare them to each other, and expect quality to fall off after the first few.</p>`;
+}
+
 // ---------------------------------------------------------------- detail
 let CUR = null;
-async function openRec(id){
+async function openRec(id, atMs){
   CUR = await api('/api/recordings/'+id);
   const r = CUR;
   const tr = esc(r.transcript).replace(/\[(\d{2}:\d{2}:\d{2})\]/g,
@@ -565,6 +645,21 @@ async function openRec(id){
     </div>`;
   renderRecActions();
   show('detail');
+
+  // Arriving from a search hit: cue the audio to that moment and scroll the transcript
+  // to it, rather than dropping the reader at the top of a ninety-minute conversation.
+  if (atMs){
+    const t = new Date(atMs).toISOString().substr(11, 8);
+    const au = $('#au');
+    if (au) au.currentTime = atMs / 1000;   // cued, not played — nobody wants surprise audio
+    const marks = [...document.querySelectorAll('#tr .ts')];
+    const hit = marks.find(m => m.textContent.includes(t)) || marks.find(m => m.textContent >= '['+t);
+    if (hit){
+      hit.scrollIntoView({block:'center'});
+      hit.style.background = 'var(--gold-soft)';
+      hit.style.outline = '2px solid var(--gold)';
+    }
+  }
 }
 
 // The within-recording arc the aggregate was reduced from — a flat mean over a
