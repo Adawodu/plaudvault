@@ -184,17 +184,40 @@ class Store:
 
     # ------------------------------------------------------------------ reads
 
+    # A recording tiered `exclude` is noise you have dismissed: it stays on disk with
+    # its audio and verification facts, but leaves the console and stops consuming the
+    # pipeline. Spelled once, used everywhere, so the two can never disagree.
+    NOT_EXCLUDED = (
+        "r.id NOT IN (SELECT recording_id FROM triage WHERE tier = 'exclude')"
+    )
+
     def get(self, rec_id: str) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM recordings WHERE id = ?", (rec_id,)).fetchone()
 
     def all(self) -> list[sqlite3.Row]:
+        """Every recording, dismissed ones included. Verification and repair read this."""
         return self.db.execute("SELECT * FROM recordings ORDER BY started_at DESC").fetchall()
+
+    def visible(self) -> list[sqlite3.Row]:
+        """What the console shows: everything you have not dismissed."""
+        return self.db.execute(
+            f"SELECT r.* FROM recordings r WHERE {self.NOT_EXCLUDED} "
+            "ORDER BY r.started_at DESC"
+        ).fetchall()
+
+    def hidden(self) -> list[sqlite3.Row]:
+        """The dismissed ones, so they can be reviewed and restored."""
+        return self.db.execute(
+            "SELECT r.* FROM recordings r JOIN triage t ON t.recording_id = r.id "
+            "WHERE t.tier = 'exclude' ORDER BY r.started_at DESC"
+        ).fetchall()
 
     def needing(self, column: str, *, requires: str) -> list[sqlite3.Row]:
         """Rows where `column` is unset but prerequisite `requires` is set."""
         return self.db.execute(
-            f"SELECT * FROM recordings WHERE {column} IS NULL AND {requires} IS NOT NULL "
-            "ORDER BY started_at DESC"
+            f"SELECT r.* FROM recordings r WHERE r.{column} IS NULL "
+            f"AND r.{requires} IS NOT NULL AND {self.NOT_EXCLUDED} "
+            "ORDER BY r.started_at DESC"
         ).fetchall()
 
     def stale_notes(self) -> list[sqlite3.Row]:
@@ -367,8 +390,9 @@ class Store:
 
     def needing_sentiment(self) -> list[sqlite3.Row]:
         return self.db.execute(
-            "SELECT * FROM recordings WHERE sentiment_at IS NULL "
-            "AND transcript_path IS NOT NULL ORDER BY started_at DESC"
+            f"SELECT r.* FROM recordings r WHERE r.sentiment_at IS NULL "
+            f"AND r.transcript_path IS NOT NULL AND {self.NOT_EXCLUDED} "
+            "ORDER BY r.started_at DESC"
         ).fetchall()
 
     # ------------------------------------------------------------------ chunks
@@ -407,7 +431,8 @@ class Store:
         leaving a corpus half in one vector space and half in another.
         """
         return self.db.execute(
-            "SELECT r.* FROM recordings r WHERE r.transcript_path IS NOT NULL "
+            f"SELECT r.* FROM recordings r WHERE r.transcript_path IS NOT NULL "
+            f"AND {self.NOT_EXCLUDED} "
             "AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.recording_id = r.id "
             "AND c.model = ?) ORDER BY r.started_at DESC",
             (model,),

@@ -132,11 +132,40 @@ Every recording gets one of three tiers:
 - **stack** — the transcript is *copied* into `stack/`, the only directory meant to be
   indexed by a search or knowledge tool.
 - **local** — archived and searchable in the console, kept out of that corpus.
-- **exclude** — noise.
+- **exclude** — noise. Dismissed: gone from every console surface *and* skipped by the
+  rest of the pipeline, so it stops costing you model time. The audio and its
+  verification facts stay on the drive untouched.
 
 Re-tier something out of *stack* and the copy is deleted on the next sync. The
 decision is enforced by what exists on disk, not by a flag downstream tools have to
 remember to respect.
+
+### Dismissing noise
+
+Not every recording deserves your attention. A thirty-second misfire, a pocket
+recording, the demo files that shipped with the device — press **dismiss** on any card
+and it leaves the Inbox, the Library, Search, Trends and the `stack/` corpus in one
+click, with no dialog.
+
+Three properties make that safe to do freely:
+
+- **Nothing is deleted.** The audio, its sha256 and its size/container facts are
+  untouched, so the recording stays verifiable and prunable later.
+- **It never comes back.** Triage lives in its own table that `sync` never writes to,
+  so re-syncing refreshes the metadata and leaves your decision alone.
+- **It stops costing you.** Summarize, tone, extract and index all skip it, and
+  freshness stops counting it as work owed — otherwise the pill would sit amber
+  forever over work nobody wants done.
+
+Dismissed recordings are still there: tick **show dismissed** in the Library to review
+or **restore** them. The Library always prints how many are hidden, so "quiet by
+default" never becomes "silently missing".
+
+### If you delete from Plaud directly
+
+Perfectly fine — your drive is the copy of record. `sync` only ever *adds*: it never
+deletes a local row or a local file because something vanished from Plaud's cloud. You
+can empty the Plaud account entirely and the archive is unaffected.
 
 This matters more than it sounds. A wearable recorder captures whoever is in earshot —
 family, colleagues, strangers — and none of them opted in. Defaulting personal

@@ -174,8 +174,11 @@ audio{width:100%;margin:10px 0}
         <option value="">All tiers</option>
         <option value="stack">In cognitive stack</option>
         <option value="local">Local only</option>
-        <option value="exclude">Excluded</option>
       </select>
+      <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12.5px">
+        <input type="checkbox" id="libHidden" style="width:auto"> show dismissed
+      </label>
+      <span class="faint" id="libCount"></span>
     </div>
     <div id="libList"></div>
   </section>
@@ -296,7 +299,14 @@ audio{width:100%;margin:10px 0}
       <p><b>Local only</b> — archived and searchable here, but kept out of the corpus.
       The right default for anything personal or involving other people. A pin recorder
       picks up whoever is in earshot; they did not opt in.</p>
-      <p><b>Exclude</b> — noise, misfires, empty rooms.</p>
+      <p><b>Exclude</b> — noise, misfires, empty rooms. Same as pressing <b>dismiss</b> on a card.</p>
+      <p>Dismissing takes a recording out of the Inbox, Library, Search, Trends and
+      <span class="mono">stack/</span>, and stops the pipeline spending model time on it.
+      <b>Nothing is deleted</b> — the audio and its verification facts stay on your drive, so it
+      remains verifiable and prunable later. And because triage lives in its own table that sync
+      never writes to, a dismissal survives every future sync rather than reappearing.</p>
+      <p class="faint">Tick <b>show dismissed</b> in the Library to review or restore them. The
+      Library always says how many are hidden — quiet by default should never mean silently missing.</p>
       <p class="faint">Tiering is physical, not advisory: changing a recording to local-only
       deletes its copy from <span class="mono">stack/</span> on the next sync.</p>
     </div>
@@ -551,8 +561,23 @@ function recCard(r, showTier){
       </div>
       <div class="row">${showTier?tier:''}${prune}${tone}${acts}${open}
         <button class="btn sm" onclick="openRec('${r.id}')">Open</button>
+        ${r.tier === 'exclude'
+          ? `<button class="btn sm" title="Put this back in the console" onclick="dismissRec('${r.id}',true,event)">restore</button>`
+          : `<button class="btn sm" title="Noise — take it out of the console. The audio stays on your drive." onclick="dismissRec('${r.id}',false,event)">dismiss</button>`}
       </div>
     </div></div>`;
+}
+
+// Dismissing is one click and no dialog, because the whole point is that judging
+// something as noise should cost less attention than the noise did. Nothing is
+// deleted: this sets the `exclude` tier, which takes the recording out of every
+// console surface and out of the pipeline, while the audio and its verification
+// facts stay untouched on the drive.
+async function dismissRec(id, restore, ev){
+  if (ev) ev.stopPropagation();
+  await jpost(`/api/recordings/${id}/dismiss`, {restore: !!restore});
+  await refresh();
+  loadFreshness();
 }
 
 async function loadInbox(){
@@ -564,15 +589,23 @@ async function loadInbox(){
 }
 
 async function loadLibrary(){
-  const t = $('#libTier').value, q = $('#libSearch').value;
-  const rows = await api(`/api/recordings?${t?`tier=${t}&`:''}q=${encodeURIComponent(q)}`);
-  setNav(rows.map(r => r.id), q || t ? 'Library (filtered)' : 'Library', 'library');
+  const t = $('#libTier').value, q = $('#libSearch').value, h = $('#libHidden').checked;
+  const rows = await api(`/api/recordings?${h?'hidden=true&':''}${t&&!h?`tier=${t}&`:''}q=${encodeURIComponent(q)}`);
+  setNav(rows.map(r => r.id), h ? 'Dismissed' : (q || t ? 'Library (filtered)' : 'Library'), 'library');
   $('#libList').innerHTML = rows.length
     ? rows.map(r => recCard(r,true)).join('')
-    : '<div class="empty">Nothing matches.</div>';
+    : `<div class="empty">${h ? 'Nothing dismissed.' : 'Nothing matches.'}</div>`;
+  // Say how many are hidden, so "quiet by default" never becomes "silently missing".
+  try {
+    const hid = await api('/api/recordings?hidden=true');
+    $('#libCount').textContent = hid.length
+      ? `${rows.length} shown · ${hid.length} dismissed`
+      : `${rows.length} recordings`;
+  } catch(e){}
 }
 $('#libSearch').oninput = () => loadLibrary();
 $('#libTier').onchange = () => loadLibrary();
+$('#libHidden').onchange = () => loadLibrary();
 
 // ---------------------------------------------------------------- search
 async function loadSearch(){

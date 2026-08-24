@@ -80,11 +80,18 @@ def _rec_dto(cfg, store, r) -> dict:
 
 
 @app.get("/api/recordings")
-def recordings(tier: str | None = None, untriaged: bool = False, q: str = ""):
+def recordings(tier: str | None = None, untriaged: bool = False, q: str = "",
+               hidden: bool = False):
     cfg = _cfg()
     with _store(cfg) as store:
-        rows = store.untriaged() if untriaged else (
-            store.by_tier(tier) if tier else store.all()
+        # `hidden=true` is the only way to see dismissed recordings. The default is
+        # quiet: the console is a workspace, and noise you already judged as noise
+        # should not keep asking for attention.
+        rows = (
+            store.hidden() if hidden
+            else store.untriaged() if untriaged
+            else store.by_tier(tier) if tier
+            else store.visible()
         )
         if q:
             needle = q.lower()
@@ -146,6 +153,30 @@ def triage(rec_id: str, body: dict = Body(...)):
         # Tiering is only real once the corpus on disk reflects it.
         report = tiering.sync(cfg, store)
         return {"ok": True, "tier": tier, "stack_sync": report}
+
+
+@app.post("/api/recordings/{rec_id}/dismiss")
+def dismiss(rec_id: str, body: dict = Body(default={})):
+    """Take a recording out of the console without touching a byte of the archive.
+
+    This is `exclude` with one click. The audio, its sha256 and its size/container
+    facts all stay exactly as they are, so the recording remains verifiable and
+    prunable later — and because triage lives in its own table that sync never
+    writes to, the decision survives every future sync.
+    """
+    cfg = _cfg()
+    restore = bool(body.get("restore"))
+    with _store(cfg) as store:
+        if store.get(rec_id) is None:
+            raise HTTPException(404, "no such recording")
+        store.set_triage(
+            rec_id,
+            "local" if restore else "exclude",
+            marked_for_prune=False,
+            note=str(body.get("note") or "")[:1000],
+        )
+        report = tiering.sync(cfg, store)
+        return {"ok": True, "tier": "local" if restore else "exclude", "stack_sync": report}
 
 
 # ----------------------------------------------------------------------- actions

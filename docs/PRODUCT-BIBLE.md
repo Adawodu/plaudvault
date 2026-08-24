@@ -200,6 +200,39 @@ return code. A bootstrap that lost the race to its own plist write left a "sched
 that would never have run — and you would only discover it when recordings quietly stopped
 syncing.
 
+### D15 — `exclude` means out of the console *and* out of the pipeline
+The console is a workspace, so noise you have already judged as noise must stop asking
+for attention. `exclude` was half-built: it dropped a recording from Trends, Search and
+`stack/` but left it in the Library, and the pipeline kept summarizing, tone-scoring,
+mining and embedding it — spending model time on material already declared worthless.
+
+**Decided:** one predicate, `Store.NOT_EXCLUDED`, spelled once and used by every
+"what still needs doing" query, so the console and the pipeline can never disagree
+about what counts.
+
+Freshness had to follow, or the pill would sit amber forever over work nobody wants
+done — the same cry-wolf failure D11 exists to prevent.
+
+Three properties make dismissing safe enough to do on one click with no dialog:
+- **Nothing is deleted.** Audio, sha256, size and container facts are untouched, so the
+  recording stays verifiable and prunable later.
+- **It is permanent.** Triage lives in its own table; `upsert_remote` writes only
+  `filename`, `remote_md5`, `remote_size` and `meta_json`, so a re-sync refreshes
+  metadata and leaves the decision alone. Verified by a test that re-lists every
+  recording with changed names and asserts the dismissal survives.
+- **It is reversible and visible.** A `show dismissed` toggle restores them, and the
+  Library always prints the hidden count — quiet by default must never become silently
+  missing.
+
+### D16 — Deleting from Plaud must never reduce the local archive
+The archive is the copy of record; the cloud is a pipe. Deleting a recording in Plaud's
+app — rather than via `plaudctl prune` — is a legitimate workflow, and the Plaud account
+may legitimately end up empty.
+
+`sync` only ever adds. It never deletes a local row or file because something vanished
+from the listing. Proven by a test that syncs against a client returning zero
+recordings and asserts all local rows and audio files survive.
+
 ### D14 — qwen3:8b, not the largest model available
 `qwen3.8` (27.3B, Q4_K_M, 17.7 GB) was pulled and **cannot load** on a 24 GB machine:
 5m04s of thrashing, swap climbing, then `timed out waiting for llama-server to start`,
@@ -224,11 +257,11 @@ _Generated 2026-08-24 from git and the live archive._
 | | |
 |---|---|
 | Python modules | 22 |
-| Lines of Python | 4,914 |
-| Commits | 9 |
+| Lines of Python | 4,974 |
+| Commits | 10 |
 | CLI verbs | 19 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `store.py` (508), `web.py` (444), `cli.py` (398), `metrics.py` (320), `service.py` (283), `extract.py` (264).
+Largest modules: `store.py` (533), `web.py` (475), `cli.py` (398), `metrics.py` (320), `service.py` (283), `extract.py` (264).
 
 ### Live archive
 
@@ -242,7 +275,7 @@ Largest modules: `store.py` (508), `web.py` (444), `cli.py` (398), `metrics.py` 
 | Open commitments | 81 |
 | Action events | 528 |
 | Audio captured | 19.3 hours |
-| Tiers | local 3 · stack 7 |
+| Tiers | exclude 1 · local 2 · stack 7 |
 
 <!-- END:STATUS -->
 
@@ -256,6 +289,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-24 | Dismissing noise takes it out of the console and out of the pipeline |
 | 2026-08-24 | Refresh bible status after the archive grew |
 | 2026-08-23 | Drop the SHA column: a table cannot contain its own commit hash |
 | 2026-08-23 | Document the whole thing: three diagrams, a product bible, and a way to keep it current |

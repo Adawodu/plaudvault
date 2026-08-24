@@ -28,8 +28,11 @@ DAY = 86400
 
 def _pending(store: Store, cfg: Config) -> list[dict]:
     """Work items the pipeline still owes, in the order the pipeline does them."""
+    # Dismissed recordings are deliberately unprocessed, so counting them as pending
+    # would leave the freshness pill permanently amber for work nobody wants done —
+    # exactly the cry-wolf failure the verdict is designed to avoid.
     q = lambda w: store.db.execute(  # noqa: E731
-        f"SELECT COUNT(*) FROM recordings WHERE {w}"
+        f"SELECT COUNT(*) FROM recordings r WHERE ({w}) AND {store.NOT_EXCLUDED}"
     ).fetchone()[0]
 
     items = [
@@ -72,7 +75,8 @@ def _pending(store: Store, cfg: Config) -> list[dict]:
             # incomplete search rather than an error.
             "stage": "index",
             "count": store.db.execute(
-                "SELECT COUNT(*) FROM recordings r WHERE r.transcript_path IS NOT NULL "
+                f"SELECT COUNT(*) FROM recordings r WHERE r.transcript_path IS NOT NULL "
+                f"AND {store.NOT_EXCLUDED} "
                 "AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.recording_id = r.id "
                 "AND c.model = ?)",
                 (cfg.embed_model,),
