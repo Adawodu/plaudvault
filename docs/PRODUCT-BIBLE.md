@@ -225,7 +225,7 @@ _Generated 2026-08-23 from git and the live archive._
 |---|---|
 | Python modules | 22 |
 | Lines of Python | 4,914 |
-| Commits | 7 |
+| Commits | 8 |
 | CLI verbs | 19 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
 Largest modules: `store.py` (508), `web.py` (444), `cli.py` (398), `metrics.py` (320), `service.py` (283), `extract.py` (264).
@@ -251,17 +251,19 @@ Largest modules: `store.py` (508), `web.py` (444), `cli.py` (398), `metrics.py` 
 ## 6. Shipped
 
 <!-- BEGIN:SHIPPED (generated — do not edit by hand) -->
-Newest first. Each commit message carries the reasoning; this is only the index.
+Newest first. Each commit message carries the full reasoning; this is the index.
+Find one with `git log --grep="<subject>"`.
 
-| Date | Commit | What landed |
-|---|---|---|
-| 2026-08-23 | `7202bfa` | Document the whole thing: three diagrams, a product bible, and a way to keep it current |
-| 2026-08-22 | `2470d05` | Step between recordings without going back to the list |
-| 2026-08-22 | `d37c4ac` | Semantic search over transcripts, with timestamped hits |
-| 2026-08-22 | `34d82c2` | Extract commitments only; suggestions become opt-in |
-| 2026-08-22 | `6437eef` | Refuse extracted actions whose quote isn't in the transcript |
-| 2026-08-21 | `e679a3b` | Keep excluded recordings off the trend, and verify launchd actually loaded |
-| 2026-08-21 | `0f72395` | Own your Plaud recordings end to end |
+| Date | What landed |
+|---|---|
+| 2026-08-23 | Drop the SHA column: a table cannot contain its own commit hash |
+| 2026-08-23 | Document the whole thing: three diagrams, a product bible, and a way to keep it current |
+| 2026-08-22 | Step between recordings without going back to the list |
+| 2026-08-22 | Semantic search over transcripts, with timestamped hits |
+| 2026-08-22 | Extract commitments only; suggestions become opt-in |
+| 2026-08-22 | Refuse extracted actions whose quote isn't in the transcript |
+| 2026-08-21 | Keep excluded recordings off the trend, and verify launchd actually loaded |
+| 2026-08-21 | Own your Plaud recordings end to end |
 <!-- END:SHIPPED -->
 
 ---

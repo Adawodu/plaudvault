@@ -130,22 +130,29 @@ def cli_verbs() -> list[str]:
 
 
 def block_shipped() -> str:
-    """Every commit, newest first — the honest record of what actually landed."""
-    log = sh("git", "log", "--pretty=format:%h\x1f%ad\x1f%s", "--date=short")
+    """Every commit, newest first — the honest record of what actually landed.
+
+    Deliberately no SHA column. The post-commit hook amends the commit it just
+    regenerated this from, which changes that commit's hash — so a table containing
+    its own SHA is stale the instant it is written, and `--check` would fail forever
+    by exactly one row. Subjects are unique enough to find with `git log --grep`.
+    """
+    log = sh("git", "log", "--pretty=format:%ad\x1f%s", "--date=short")
     if not log:
         return "_No commits yet._"
     lines = [
-        "Newest first. Each commit message carries the reasoning; this is only the index.",
+        "Newest first. Each commit message carries the full reasoning; this is the index.",
+        "Find one with `git log --grep=\"<subject>\"`.",
         "",
-        "| Date | Commit | What landed |",
-        "|---|---|---|",
+        "| Date | What landed |",
+        "|---|---|",
     ]
     for row in log.splitlines():
         parts = row.split("\x1f")
-        if len(parts) != 3:
+        if len(parts) != 2:
             continue
-        sha, when, subject = parts
-        lines.append(f"| {when} | `{sha}` | {subject.replace('|', '\\|')} |")
+        when, subject = parts
+        lines.append(f"| {when} | {subject.replace('|', '\\|')} |")
     return "\n".join(lines)
 
 
