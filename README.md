@@ -256,6 +256,35 @@ rank (13 vs 15) but *reduced* top-3 hits (2/4 vs 3/4) — too small a sample to 
 anything. They are kept because they are the model's documented usage and Ollama's
 template (`{{ .Prompt }}`) confirms it does not add them itself.
 
+## The shape of a conversation
+
+A recording is not a grid of cards. It has a beginning and an end, it moves, and things
+get said at particular moments. So it is drawn along its own duration: tone fills the
+band, and every commitment is pinned at the minute it was spoken. Where the band shifts
+is where the conversation turned; a cluster of pins is where the work got decided. You
+can read the shape before you read a word.
+
+Open any recording and press **draw it**, or from a terminal:
+
+```bash
+plaudctl story                              # the most recently scored recording
+plaudctl story <id> --format excalidraw     # editable scene instead of SVG
+```
+
+Two renderers over one layout. **SVG** goes straight into the console — live, themed for
+light and dark, no dependency. **`.excalidraw`** is the same picture as an editable
+scene, so you can open it, drag things and write on it. A picture you can annotate is
+yours in a way a generated report is not.
+
+Only the commitments that earned it get a label — anything you accepted or completed
+first, then the earliest. The rest stay as ticks on the band with an honest count, because
+a label on every pin is chaos and goes unread. On a busy conversation the layout grows
+downward rather than pushing labels up through the title.
+
+Two honest limits are printed on the picture itself: tone is an estimate over a
+transcript, and segment widths are **proportional, not measured** — sentiment chunks are
+equal slices of text, not equal slices of time.
+
 ## Tone, and the trend
 
 Every transcript is scored for emotional register as part of a normal run — on by

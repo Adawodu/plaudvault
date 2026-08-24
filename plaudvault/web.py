@@ -18,7 +18,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, freshness, llm, metrics, runlock, search, tiering, transcribe
+from . import auth, freshness, llm, metrics, runlock, search, story, tiering, transcribe
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -303,6 +303,28 @@ def sentiment_trend(
             include_low_confidence=low_confidence,
             include_excluded=excluded,
         )
+
+
+@app.get("/api/story/{rec_id}")
+def recording_story_svg(rec_id: str, fmt: str = "svg"):
+    """The recording drawn along its own duration.
+
+    `fmt=svg` is what the console embeds — live, themed, no dependency.
+    `fmt=excalidraw` returns the same layout as an editable scene to download.
+    """
+    cfg = _cfg()
+    with _store(cfg) as st:
+        try:
+            model = story.recording_story(cfg, st, rec_id)
+        except KeyError:
+            raise HTTPException(404, "no such recording") from None
+    if fmt == "excalidraw":
+        return JSONResponse(
+            story.to_excalidraw(model),
+            headers={"Content-Disposition": f'attachment; filename="story-{rec_id}.excalidraw"'},
+        )
+    return {"svg": story.to_svg(model), "pins": len(model["pins"]),
+            "labelled": sum(1 for p in model["pins"] if p.get("labelled"))}
 
 
 # ----------------------------------------------------------------------- search

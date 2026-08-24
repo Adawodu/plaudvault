@@ -256,25 +256,25 @@ _Generated 2026-08-24 from git and the live archive._
 
 | | |
 |---|---|
-| Python modules | 22 |
-| Lines of Python | 4,974 |
-| Commits | 10 |
-| CLI verbs | 19 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
+| Python modules | 23 |
+| Lines of Python | 5,505 |
+| Commits | 11 |
+| CLI verbs | 20 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `store.py` (533), `web.py` (475), `cli.py` (398), `metrics.py` (320), `service.py` (283), `extract.py` (264).
+Largest modules: `store.py` (533), `web.py` (497), `story.py` (468), `cli.py` (439), `metrics.py` (320), `service.py` (283).
 
 ### Live archive
 
 | | |
 |---|---|
-| Recordings | 33 |
-| Transcribed | 33 |
-| Tone scored | 32 |
-| Indexed chunks | 716 |
+| Recordings | 37 |
+| Transcribed | 37 |
+| Tone scored | 36 |
+| Indexed chunks | 788 |
 | Triaged | 10 |
-| Open commitments | 81 |
-| Action events | 528 |
-| Audio captured | 19.3 hours |
+| Open commitments | 0 |
+| Action events | 779 |
+| Audio captured | 22.0 hours |
 | Tiers | exclude 1 · local 2 · stack 7 |
 
 <!-- END:STATUS -->
@@ -289,6 +289,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-24 | Draw a recording along its own duration, not as a grid of cards |
 | 2026-08-24 | Dismissing noise takes it out of the console and out of the pipeline |
 | 2026-08-24 | Refresh bible status after the archive grew |
 | 2026-08-23 | Drop the SHA column: a table cannot contain its own commit hash |

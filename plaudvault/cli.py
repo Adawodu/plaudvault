@@ -5,10 +5,11 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
 from . import (auth, extract, freshness, notes, prune, runlock, search,
-               sentiment, service, setup_wizard, summarize, sync, tiering,
-               transcribe)
+               sentiment, service, setup_wizard, story, summarize, sync,
+               tiering, transcribe)
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -117,6 +118,40 @@ def cmd_search(args, cfg) -> int:
         body = " ".join(h["text"].split())
         print(f"        {body[:200]}{'…' if len(body) > 200 else ''}")
     print("\n  scores are cosine similarity, not confidence — compare them to each other")
+    return 0
+
+
+def cmd_story(args, cfg) -> int:
+    """Draw a recording along its own duration, as SVG or an editable Excalidraw scene."""
+    import json as _json
+
+    with Store(cfg.db_path) as st:
+        rid = args.recording
+        if not rid:
+            row = st.db.execute(
+                "SELECT recording_id FROM sentiment ORDER BY scored_at DESC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                print("  nothing scored yet — run: plaudctl run")
+                return 1
+            rid = row[0]
+        try:
+            model = story.recording_story(cfg, st, rid)
+        except KeyError:
+            print(f"error: no recording {rid}", file=sys.stderr)
+            return 1
+
+    excal = args.format == "excalidraw"
+    out = Path(args.out) if args.out else Path(
+        f"story-{rid}.{'excalidraw' if excal else 'svg'}"
+    )
+    out.write_text(
+        _json.dumps(story.to_excalidraw(model), indent=1) if excal else story.to_svg(model)
+    )
+    print(f"  {model['title'][:60]}")
+    print(f"  {model['duration_min']} min · {len(model['segments'])} tone segments · "
+          f"{len(model['pins'])} commitments pinned")
+    print(f"  wrote {out}")
     return 0
 
 
@@ -312,7 +347,8 @@ def main(argv=None) -> int:
     def add(name, fn, help_):
         sp = sub.add_parser(name, help=help_)
         sp.set_defaults(fn=fn, limit=None, force=False, yes=False, probe=False, cloud=False,
-                        suggestions=False, excluded=False, query='')
+                        suggestions=False, excluded=False, query='',
+                        recording=None, format='svg', out=None)
         return sp
 
     sp = add("login", cmd_login, "authenticate with Plaud (emailed one-time code)")
@@ -353,6 +389,11 @@ def main(argv=None) -> int:
     sp.add_argument("query")
     sp.add_argument("--limit", type=int, help="how many hits (default 10)")
     sp.add_argument("--excluded", action="store_true", help="also search excluded recordings")
+
+    sp = add("story", cmd_story, "draw a recording along its own duration")
+    sp.add_argument("recording", nargs="?", help="recording id (default: most recently scored)")
+    sp.add_argument("--format", choices=["svg", "excalidraw"], default="svg")
+    sp.add_argument("--out", help="output path")
 
     add("tier", cmd_tier, "reconcile PLAUD/stack/ with your triage decisions")
 
