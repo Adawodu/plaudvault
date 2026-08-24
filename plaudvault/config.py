@@ -80,7 +80,7 @@ DEFAULTS: dict = {
 
     # ---- behaviour --------------------------------------------------------
     # Extract only what someone actually committed to. Turning this on also asks for
-    # implied next steps, which a small local model produces in bulk: on a real 30-hour
+    # implied next steps, which a small local model produces in bulk: on a real ~20-hour
     # corpus it returned 198 suggestions against 57 commitments, and the suggestions
     # were mostly topic summaries. A board nobody opens measures nothing.
     "extract_suggestions": False,

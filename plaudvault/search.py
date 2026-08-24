@@ -5,7 +5,7 @@ underpaid; the recording says "they're not exactly making it worth my while." No
 substring links those, and the recording stays lost. Embeddings do link them, which is
 the whole reason this exists.
 
-Brute force on purpose. Thirty hours of audio is roughly 650 chunks, and 650 dot
+Brute force on purpose. Twenty hours of audio is roughly 700 chunks, and 700 dot
 products against a 768-dimension vector is under a millisecond in numpy — far below the
 cost of the one network call that embeds the query. A vector database here would add a
 dependency, a daemon, and an index to corrupt, in exchange for nothing measurable. If

@@ -40,6 +40,15 @@ transcription, your summaries, and delete-after-archive* — not
 never-touches-their-servers. If that distinction matters to you, it should, and no
 amount of software on this end changes it.
 
+## Documentation
+
+- **[Product bible](docs/PRODUCT-BIBLE.md)** — what this is, every contested technical
+  decision with the reasoning that settled it, the backlog, the roadmap, and the known
+  limits. Its status sections regenerate from git and the live archive.
+- **Diagrams** — [architecture](docs/diagrams/architecture.png) ·
+  [data model](docs/diagrams/data-model.png) ·
+  [user journeys](docs/diagrams/user-journeys.png) (editable `.excalidraw` sources alongside)
+
 ## Requirements
 
 - Python 3.11+
@@ -142,8 +151,8 @@ empty list for those rather than manufacturing work.
 
 `--suggestions` (or `extract_suggestions = true`) also asks for implied next steps.
 It is off by default because a small local model is bad at the judgment it requires:
-on a real 30-hour corpus it returned **198 suggestions against 57 commitments**, and the
-suggestions were largely topic summaries — *"Discuss the app's features"*, *"Share the
+on a real ~20-hour corpus (33 recordings) it returned **198 suggestions against 57
+commitments**, and the suggestions were largely topic summaries — *"Discuss the app's features"*, *"Share the
 screen to show the app concept"* (which had already happened), *"Secure and compliant
 infrastructure for managing IP"* (not an action at all). A 255-item board is one you
 stop opening, and a board nobody opens measures nothing.
@@ -189,10 +198,10 @@ plaudctl search "feeling underpaid at work"
 Or the **Search** tab in the console, where every hit opens the recording cued to the
 moment it was said.
 
-Indexing runs as part of `plaudctl run`. On a 30-hour archive it is ~650 passages and
+Indexing runs as part of `plaudctl run`. On a ~20-hour archive it is ~700 passages and
 takes about **14 seconds**; search itself is one embedding call plus a matrix multiply.
 
-Deliberately brute force. 650 dot products against a 768-dimension vector is well under
+Deliberately brute force. ~700 dot products against a 768-dimension vector is well under
 a millisecond in numpy — far below the cost of the single network call that embeds your
 query. A vector database would add a dependency, a daemon, and an index to corrupt, in
 exchange for nothing measurable at this scale. Vectors live as raw float32 in the same
