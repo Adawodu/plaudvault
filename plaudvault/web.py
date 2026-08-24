@@ -179,6 +179,38 @@ def dismiss(rec_id: str, body: dict = Body(default={})):
         return {"ok": True, "tier": "local" if restore else "exclude", "stack_sync": report}
 
 
+@app.post("/api/recordings/bulk")
+def recordings_bulk(body: dict = Body(...)):
+    """Triage or dismiss many recordings at once.
+
+    Bulk actions are the difference between a triage pass you finish and one you
+    abandon. Nothing here touches audio: every operation is a triage decision, and the
+    archive is unchanged whichever way it goes.
+    """
+    cfg = _cfg()
+    ids = [str(i) for i in (body.get("ids") or [])]
+    tier = body.get("tier")
+    if not ids:
+        raise HTTPException(400, "no recordings selected")
+    if tier not in ("stack", "local", "exclude"):
+        raise HTTPException(400, "tier must be stack, local or exclude")
+    if len(ids) > 500:
+        raise HTTPException(400, "refusing to bulk-edit more than 500 at once")
+
+    done, missing = 0, []
+    with _store(cfg) as store:
+        for rec_id in ids:
+            if store.get(rec_id) is None:
+                missing.append(rec_id)
+                continue
+            store.set_triage(rec_id, tier, marked_for_prune=False,
+                             note=str(body.get("note") or "")[:1000])
+            done += 1
+        report = tiering.sync(cfg, store)
+    return {"ok": True, "updated": done, "missing": missing, "tier": tier,
+            "stack_sync": report}
+
+
 # ----------------------------------------------------------------------- actions
 
 
@@ -247,6 +279,45 @@ def update_action(action_id: int, body: dict = Body(...)):
         return {"ok": True, "action": _row(store.get_action(action_id))}
 
 
+@app.post("/api/actions/bulk")
+def actions_bulk(body: dict = Body(...)):
+    """Move many actions to one status at once.
+
+    Rejecting in bulk is the point: an extractor that over-proposes makes a board you
+    stop opening, and clearing it one dialog at a time is why it stays cleared. Every
+    transition still goes through update_action, so each one is journalled to
+    action_events individually — bulk is a convenience, never a shortcut past the audit.
+    """
+    cfg = _cfg()
+    ids = body.get("ids") or []
+    status = body.get("status")
+    if not ids:
+        raise HTTPException(400, "no actions selected")
+    if status not in ("proposed", "accepted", "in_progress", "done", "dropped"):
+        raise HTTPException(400, "bad status")
+    if len(ids) > 1000:
+        raise HTTPException(400, "refusing to bulk-edit more than 1000 at once")
+
+    fields = {"status": status}
+    if body.get("outcome_note"):
+        fields["outcome_note"] = str(body["outcome_note"])[:1000]
+    if status == "done" and body.get("outcome_score") is not None:
+        try:
+            fields["outcome_score"] = max(1, min(5, int(body["outcome_score"])))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "outcome_score must be 1-5") from None
+
+    done, missing = 0, []
+    with _store(cfg) as store:
+        for aid in ids:
+            try:
+                store.update_action(int(aid), **fields)
+                done += 1
+            except (KeyError, ValueError):
+                missing.append(aid)
+    return {"ok": True, "updated": done, "missing": missing, "status": status}
+
+
 @app.get("/api/actions/{action_id}/events")
 def action_events(action_id: int):
     cfg = _cfg()
@@ -303,6 +374,17 @@ def sentiment_trend(
             include_low_confidence=low_confidence,
             include_excluded=excluded,
         )
+
+
+@app.get("/api/arc")
+def corpus_arc(days: int | None = Query(None, ge=1, le=3650), themes: int = Query(8, ge=2, le=8)):
+    """The whole corpus as one picture: themes over time, with the tone underneath."""
+    cfg = _cfg()
+    with _store(cfg) as st:
+        model = story.arc_story(cfg, st, days=days, themes=themes)
+        return {"svg": story.arc_svg(model), "themes": model["themes"],
+                "recordings": model.get("recordings", 0), "chunks": model.get("chunks", 0),
+                "span": model.get("span", ""), "empty": model.get("empty")}
 
 
 @app.get("/api/story/{rec_id}")

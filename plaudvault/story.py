@@ -466,3 +466,339 @@ def to_excalidraw(model: dict) -> dict:
         "appState": {"viewBackgroundColor": "#ffffff", "gridSize": 20},
         "files": {},
     }
+
+
+# ------------------------------------------------------------------- the arc
+
+# k-means over the chunk vectors. Themes come from embeddings, not from the tags the
+# summarizer writes: 155 distinct tags across 31 summaries, only three recurring even
+# three times, because the model invents fresh vocabulary every run. Tags cannot thread
+# a story. Vectors can — two conversations about the same thing land near each other
+# whatever words they happened to use.
+THEME_ITERATIONS = 25
+SEED = 20260824          # fixed, so the same corpus always yields the same picture
+
+
+def _kmeans(matrix, k: int, iterations: int = THEME_ITERATIONS):
+    import numpy as np
+
+    n = len(matrix)
+    k = max(1, min(k, n))
+    rng = np.random.default_rng(SEED)
+    # k-means++ seeding: spreading the initial centres apart matters far more here than
+    # extra iterations, because random seeding on near-duplicate chunks collapses.
+    centres = [matrix[rng.integers(n)]]
+    for _ in range(k - 1):
+        d = np.min(
+            np.stack([1.0 - matrix @ c for c in centres]), axis=0
+        ).clip(min=1e-9)
+        centres.append(matrix[rng.choice(n, p=d / d.sum())])
+    C = np.stack(centres)
+
+    labels = np.zeros(n, dtype=int)
+    for _ in range(iterations):
+        new = np.argmax(matrix @ C.T, axis=1)   # vectors are normalised: dot == cosine
+        if np.array_equal(new, labels):
+            break
+        labels = new
+        for j in range(k):
+            members = matrix[labels == j]
+            if len(members):
+                v = members.mean(axis=0)
+                C[j] = v / max(np.linalg.norm(v), 1e-9)
+    return labels, C
+
+
+def _name_theme(cluster_texts: list[str], corpus_df: dict, n_docs: int, k: int = 4) -> str:
+    """Name a cluster by what distinguishes it, not by what it says most.
+
+    Counting frequent words names every cluster "it's · that's · don't", because the
+    commonest words in conversation are common in *every* conversation. What identifies
+    a cluster is vocabulary that is frequent here and rare elsewhere — so each word is
+    scored against how many clusters use it at all, and a word appearing everywhere is
+    worth nothing no matter how often it appears here.
+    """
+    from collections import Counter
+    import math
+
+    here = Counter()
+    for t in cluster_texts:
+        here.update(_words(t))
+    if not here:
+        return "unnamed"
+    total = sum(here.values())
+    scored = []
+    for word, count in here.items():
+        if count < 3:                      # one-off noise names nothing
+            continue
+        df = corpus_df.get(word, 0)
+        # A word used by most themes cannot identify one, however often it appears.
+        # Down-weighting alone was not enough — raw frequency kept "can", "how", "now"
+        # at the top of every cluster — so these are excluded outright, the standard
+        # corpus-specific stopword treatment.
+        if df > max(1, n_docs * 0.5):
+            continue
+        idf = math.log((n_docs + 1) / (df + 1)) + 1.0
+        scored.append(((count / total) * idf, word))
+    scored.sort(reverse=True)
+    return " · ".join(w for _, w in scored[:k]) or "unnamed"
+
+
+def _words(text: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z][a-z'-]{2,}", text.lower()) if w not in _STOP]
+
+
+# Contractions were the entire failure: every cluster came back named
+# "it's · that's · there's · don't" until these were excluded.
+_STOP = frozenset(
+    """that this with have from they what your just like know think going really
+    them been were will about would could there when then some make want need
+    right yeah okay because thing things much very well even also into more than
+    over only other same such which while these those said says say saying
+    something anything everything nothing someone anyone everyone
+    actually basically literally probably maybe kind sort lot bit
+    it's that's there's don't you're we're i'm they're doesn't didn't isn't
+    can't won't wasn't aren't couldn't wouldn't shouldn't let's here's who's
+    what's he's she's i've we've you've they've i'll we'll you'll he'll
+    gonna wanna gotta yeah yep nope okay uhm hmm mhm the and but for are was
+    你 have has had did does not you all one two get got see look come came""".split()
+)
+
+
+def arc_story(cfg: Config, store: Store, *, days: int | None = None, themes: int = 6) -> dict:
+    """The corpus as a story: what you kept coming back to, and how it felt.
+
+    Recordings are beats along a timeline. Each theme is a thread whose thickness in a
+    period is how much of that period's talking belonged to it — so a thread that
+    thickens is a preoccupation forming, and one that thins is something you stopped
+    returning to. That is a shape a card grid cannot make.
+    """
+    import numpy as np
+
+    rows = store.chunks(model=cfg.embed_model)
+    if not rows:
+        return {"kind": "arc", "themes": [], "periods": [], "recordings": [], "empty":
+                "nothing indexed yet — run: plaudctl index"}
+
+    since = int(time.time() - days * DAY_S) if days else None
+    rows = [r for r in rows if not since or r["started_at"] >= since]
+    if len(rows) < themes * 3:
+        themes = max(2, len(rows) // 3)
+    if not rows:
+        return {"kind": "arc", "themes": [], "periods": [], "recordings": [], "empty":
+                "no indexed recordings in that range"}
+
+    matrix = np.frombuffer(b"".join(r["vector"] for r in rows), dtype=np.float32)
+    matrix = matrix.reshape(len(rows), -1)
+    labels, _ = _kmeans(matrix, themes)
+
+    # weeks, so a theme's thickness reads as "how much of that week was this"
+    buckets: dict[int, dict] = {}
+    for row, lab in zip(rows, labels):
+        wk = _week_start(row["started_at"])
+        b = buckets.setdefault(wk, {"start": wk, "counts": {}, "total": 0, "recs": set()})
+        b["counts"][int(lab)] = b["counts"].get(int(lab), 0) + 1
+        b["total"] += 1
+        b["recs"].add(row["recording_id"])
+
+    # document frequency across clusters, so a word used by every theme scores nothing
+    n_clusters = int(labels.max()) + 1
+    corpus_df: dict[str, int] = {}
+    for j in range(n_clusters):
+        seen = {w for r, lab in zip(rows, labels) if lab == j for w in _words(r["text"])}
+        for w in seen:
+            corpus_df[w] = corpus_df.get(w, 0) + 1
+
+    theme_rows: list[dict] = []
+    for j in range(n_clusters):
+        members = [r for r, lab in zip(rows, labels) if lab == j]
+        if not members:
+            continue
+        theme_rows.append({
+            "id": j,
+            "name": _name_theme([m["text"] for m in members], corpus_df, n_clusters),
+            "chunks": len(members),
+            "recordings": len({m["recording_id"] for m in members}),
+            "share": len(members) / len(rows),
+        })
+    theme_rows.sort(key=lambda t: -t["chunks"])
+
+    # sentiment per week, so the tone band sits under the threads on the same axis
+    sent = {r["recording_id"]: r for r in store.sentiment_series(since=since)}
+    periods = []
+    for wk in sorted(buckets):
+        b = buckets[wk]
+        vals = [sent[rid]["valence"] for rid in b["recs"] if rid in sent]
+        periods.append({
+            "start": wk,
+            "label": time.strftime("%d %b", time.localtime(wk)),
+            "total": b["total"],
+            "recordings": len(b["recs"]),
+            "counts": b["counts"],
+            "valence": round(sum(vals) / len(vals), 3) if vals else None,
+        })
+
+    return {
+        "kind": "arc",
+        "days": days,
+        "themes": theme_rows,
+        "periods": periods,
+        "chunks": len(rows),
+        "recordings": len({r["recording_id"] for r in rows}),
+        "span": (
+            time.strftime("%d %b %Y", time.localtime(periods[0]["start"])) + " – "
+            + time.strftime("%d %b %Y", time.localtime(periods[-1]["start"]))
+        ) if periods else "",
+        "empty": None,
+    }
+
+
+DAY_S = 86400
+
+
+def _week_start(ts: float) -> int:
+    lt = time.localtime(ts)
+    monday = time.localtime(ts - lt.tm_wday * DAY_S)
+    return int(time.mktime((monday.tm_year, monday.tm_mon, monday.tm_mday, 0, 0, 0, 0, 0, -1)))
+
+
+# Eight fixed hues, assigned in order and never cycled, so a theme keeps its colour
+# when the theme count changes. Validated for colour-vision separation as a set.
+THEME_HUES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+              "#8b5cf6", "#e87ba4", "#0d9488", "#a16207"]
+
+ARC_W = 1440
+ARC_LEFT, ARC_RIGHT = 210, 1390
+
+
+def arc_svg(model: dict, *, dark: bool = False) -> str:
+    """The corpus over time: what you kept returning to, and how it felt.
+
+    The x axis is real elapsed time, not evenly spaced buckets. That matters here: this
+    archive has a cluster in May and then nothing until August, and spacing the weeks
+    evenly would invent a continuity that never happened.
+    """
+    ink = "var(--foreground,#252016)"
+    muted = "var(--muted-foreground,#786e57)"
+    faint = "var(--faint,#a2977c)"
+    rail = "var(--rail,#e0d5ba)"
+    panel = "var(--panel,#fdfbf6)"
+
+    if model.get("empty"):
+        return (f'<svg viewBox="0 0 {ARC_W} 120"><text x="40" y="64" font-size="16" '
+                f'fill="{muted}">{_esc(model["empty"])}</text></svg>')
+
+    themes, periods = model["themes"], model["periods"]
+    colour = {t["id"]: THEME_HUES[i % len(THEME_HUES)] for i, t in enumerate(themes)}
+    name = {t["id"]: t["name"] for t in themes}
+
+    top = 150
+    stack_h = 300
+    tone_y = top + stack_h + 46
+    tone_h = 26
+    H = tone_y + tone_h + 60 + len(themes) * 22 + 60
+
+    # Strict time-proportional spacing was tried and rejected on this corpus: a
+    # three-month gap swallowed 934px of a 1180px axis and squeezed the three weeks that
+    # actually matter into 250px, touching edge to edge. Even spacing with an EXPLICIT
+    # break is the honest compromise — the discontinuity is drawn and the elapsed time
+    # is labelled, so nothing is hidden, but the readable weeks get the room.
+    BAR_W = 78
+    GAP_DAYS = 14                      # anything longer than this earns a visible break
+    BREAK_W = 54
+
+    xs, breaks = [], []
+    x = ARC_LEFT
+    for i, per in enumerate(periods):
+        if i:
+            elapsed = (per["start"] - periods[i - 1]["start"]) / DAY_S
+            if elapsed > GAP_DAYS:
+                breaks.append((x + 8, elapsed))
+                x += BREAK_W
+        xs.append(x)
+        x += BAR_W + 26                # 26px keeps fills apart rather than touching
+    # if the whole thing still overflows, shrink the step rather than the bars
+    if x > ARC_RIGHT and len(periods) > 1:
+        squeeze = (ARC_RIGHT - ARC_LEFT) / max(x - ARC_LEFT, 1)
+        xs = [ARC_LEFT + (v - ARC_LEFT) * squeeze for v in xs]
+        breaks = [(ARC_LEFT + (bx - ARC_LEFT) * squeeze, d) for bx, d in breaks]
+
+    p = [f'<svg class="story" viewBox="0 0 {ARC_W} {H}" role="img" '
+         f'aria-label="Themes across {model["recordings"]} recordings, {model["span"]}">']
+    p.append(
+        f'<text x="40" y="52" font-size="26" fill="{ink}" '
+        f'font-family="var(--font-display,Georgia,serif)">What you keep coming back to</text>'
+        f'<text x="40" y="80" font-size="14" fill="{muted}">{model["recordings"]} recordings · '
+        f'{model["chunks"]} passages · {_esc(model["span"])}</text>'
+        f'<text x="40" y="102" font-size="12.5" fill="{faint}">Bar width is time actually spent; '
+        f'position is when. Gaps in the axis are weeks you recorded nothing.</text>'
+    )
+
+    # ---- stacked composition per week, placed at its real date ---------------
+    for bx, elapsed in breaks:
+        p.append(
+            f'<line x1="{bx:.0f}" y1="{top - 6}" x2="{bx:.0f}" y2="{top + stack_h + 6}" '
+            f'stroke="{rail}" stroke-width="2" stroke-dasharray="3 5"/>'
+            f'<text x="{bx + 6:.0f}" y="{top + stack_h / 2:.0f}" font-size="11" fill="{faint}" '
+            f'transform="rotate(-90 {bx + 6:.0f} {top + stack_h / 2:.0f})" text-anchor="middle">'
+            f'{elapsed / 7:.0f} weeks with nothing recorded</text>'
+        )
+
+    for per, x in zip(periods, xs):
+        w = 78
+        y = top
+        total = max(per["total"], 1)
+        for t in themes:
+            c = per["counts"].get(t["id"], 0)
+            if not c:
+                continue
+            h = stack_h * c / total
+            p.append(
+                f'<rect x="{x:.1f}" y="{y:.1f}" width="{w}" height="{max(h - 2, 1):.1f}" '
+                f'rx="2" fill="{colour[t["id"]]}"/>'
+            )
+            if h > 26:
+                p.append(
+                    f'<text x="{x + w / 2:.1f}" y="{y + h / 2 + 4:.1f}" font-size="11" '
+                    f'text-anchor="middle" fill="{panel}">{round(100 * c / total)}%</text>'
+                )
+            y += h
+        p.append(
+            f'<text x="{x + w / 2:.1f}" y="{top + stack_h + 20:.0f}" font-size="12" '
+            f'text-anchor="middle" fill="{ink}">{_esc(per["label"])}</text>'
+            f'<text x="{x + w / 2:.1f}" y="{top + stack_h + 35:.0f}" font-size="11" '
+            f'text-anchor="middle" fill="{faint}">{per["recordings"]} rec</text>'
+        )
+        if per["valence"] is not None:
+            p.append(
+                f'<rect x="{x:.1f}" y="{tone_y}" width="{w}" height="{tone_h}" rx="3" '
+                f'fill="{polarity_color(per["valence"], dark)}"/>'
+                f'<text x="{x + w / 2:.1f}" y="{tone_y + tone_h / 2 + 4:.0f}" font-size="11" '
+                f'text-anchor="middle" fill="{panel}">{per["valence"]:+.2f}</text>'
+            )
+    p.append(
+        f'<text x="40" y="{tone_y + tone_h / 2 + 4:.0f}" font-size="12" fill="{muted}">tone</text>'
+        f'<line x1="{ARC_LEFT - 14}" y1="{top}" x2="{ARC_LEFT - 14}" y2="{top + stack_h}" '
+        f'stroke="{rail}" stroke-width="1"/>'
+        f'<text x="40" y="{top + 14}" font-size="12" fill="{muted}">share of</text>'
+        f'<text x="40" y="{top + 30}" font-size="12" fill="{muted}">the talking</text>'
+    )
+
+    # ---- legend: every theme named, ordered by how much of the corpus it is --
+    ly = tone_y + tone_h + 54
+    p.append(f'<text x="40" y="{ly}" font-size="13" fill="{muted}">Themes, by share of everything recorded</text>')
+    for t in themes:
+        ly += 22
+        p.append(
+            f'<rect x="40" y="{ly - 10}" width="12" height="12" rx="2" fill="{colour[t["id"]]}"/>'
+            f'<text x="62" y="{ly}" font-size="13" fill="{ink}">{_esc(name[t["id"]])}</text>'
+            f'<text x="760" y="{ly}" font-size="12" fill="{faint}">'
+            f'{t["share"]*100:.0f}% of passages · {t["recordings"]} recordings</text>'
+        )
+    p.append(
+        f'<text x="40" y="{H - 26}" font-size="11" fill="{faint}">'
+        f'Themes are clusters of meaning, not topics anyone chose — named by the words that '
+        f'distinguish each cluster from the others. Expect one or two to be junk.</text>'
+    )
+    p.append("</svg>")
+    return "".join(p)

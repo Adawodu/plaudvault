@@ -118,6 +118,13 @@ audio{width:100%;margin:10px 0}
 .scalekey{display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted-foreground)}
 .scalekey .sw{display:flex;border-radius:4px;overflow:hidden;border:1px solid var(--rail)}
 .scalekey .sw i{width:26px;height:11px;display:block}
+#bulkbar{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:40;display:none;
+  align-items:center;gap:12px;background:var(--panel);border:1px solid var(--gold);border-radius:12px;
+  padding:11px 16px;box-shadow:0 8px 30px rgba(0,0,0,.18);flex-wrap:wrap;max-width:94vw}
+#bulkbar.on{display:flex}
+#bulkbar .n{font-weight:600;white-space:nowrap}
+.selbox{width:auto;margin-right:9px;flex:none;cursor:pointer}
+.card.sel{border-color:var(--gold);background:var(--gold-soft)}
 .storywrap{overflow-x:auto;background:var(--panel);border:1px solid var(--rail);border-radius:10px;padding:8px 4px}
 .story{display:block;width:100%;min-width:820px;height:auto}
 .hollowkey{width:11px;height:11px;border-radius:50%;border:2px solid var(--pol-0);background:var(--panel);display:inline-block}
@@ -149,6 +156,7 @@ audio{width:100%;margin:10px 0}
   <div id="runBox"></div>
 
   <section class="view on" id="v-inbox">
+    <div class="row" style="margin-bottom:10px" id="inboxTools"></div>
     <p class="muted">Recordings that have been transcribed but not yet triaged. Decide what reaches the cognitive stack, and what can leave Plaud's cloud.</p>
     <div id="inboxList"></div>
   </section>
@@ -172,6 +180,7 @@ audio{width:100%;margin:10px 0}
   <section class="view" id="v-library">
     <div class="row" style="margin-bottom:14px">
       <input id="libSearch" placeholder="Search recordings…" style="max-width:300px">
+      <button class="btn sm" onclick="selectAllVisible('recording')">select all</button>
       <select id="libTier" style="max-width:170px">
         <option value="">All tiers</option>
         <option value="stack">In cognitive stack</option>
@@ -203,6 +212,7 @@ audio{width:100%;margin:10px 0}
         <option value="done">Done</option>
         <option value="dropped">Dropped</option>
       </select>
+      <span id="actTools" class="row" style="gap:8px"></span>
     </div>
     <div id="actList"></div>
   </section>
@@ -236,6 +246,22 @@ audio{width:100%;margin:10px 0}
         <button class="btn" id="trTableBtn" onclick="toggleTrendTable()">Table view</button></div>
     </div>
     <div id="trends"></div>
+
+    <div class="card" style="margin-top:20px">
+      <div class="row spread">
+        <div><h3>What you keep coming back to</h3>
+          <div class="faint">Themes found by clustering the meaning of every passage — not the
+          summariser's tags, which invent fresh vocabulary each run and never recur.</div></div>
+        <div class="row">
+          <select id="arcThemes" style="max-width:130px">
+            <option value="6">6 themes</option><option value="8" selected>8 themes</option>
+            <option value="4">4 themes</option>
+          </select>
+          <button class="btn sm" onclick="loadArc()" id="arcBtn">draw it</button>
+        </div>
+      </div>
+      <div id="arcBody"></div>
+    </div>
   </section>
 
   <section class="view" id="v-vault">
@@ -421,6 +447,12 @@ plaudctl init         reconfigure storage, transcription, or model</pre></div>
   </section>
 </main>
 
+<div id="bulkbar">
+  <span class="n" id="bulkN"></span>
+  <span id="bulkActions" class="row" style="gap:6px"></span>
+  <button class="btn sm" onclick="clearSel()">clear</button>
+</div>
+
 <dialog id="dlg"><div id="dlgBody"></div></dialog>
 
 <script>
@@ -445,9 +477,11 @@ $('#themeBtn').onclick = () => {
 
 let VIEW = 'inbox';
 function show(v){
+  if (v !== VIEW) { SEL.clear(); SEL_KIND = null; }
   VIEW = v;
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v'+'-'+v));
   document.querySelectorAll('nav button[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  renderBulk();
   ({inbox:loadInbox, search:loadSearch, library:loadLibrary, actions:loadActions,
     trends:loadTrends, vault:loadVault, systems:loadSystems, measures:loadMeasures,
     help:loadSettings}[v]||(()=>{}))();
@@ -557,9 +591,10 @@ function recCard(r, showTier){
     style="border-color:${polColor(s.valence)}">${esc(s.label)} ${VAL(s.valence)}</span>` : '';
   return `<div class="card">
     <div class="row spread">
-      <div style="flex:1;min-width:250px">
-        <h3>${esc(r.filename)}</h3>
-        <div class="faint">${r.started_iso} · ${r.duration_min} min</div>
+      <div style="flex:1;min-width:250px;display:flex;align-items:flex-start">
+        ${selBox(r.id, 'recording')}
+        <div><h3>${esc(r.filename)}</h3>
+        <div class="faint">${r.started_iso} · ${r.duration_min} min</div></div>
       </div>
       <div class="row">${showTier?tier:''}${prune}${tone}${acts}${open}
         <button class="btn sm" onclick="openRec('${r.id}')">Open</button>
@@ -588,6 +623,10 @@ async function loadInbox(){
   $('#inboxList').innerHTML = rows.length
     ? rows.map(r => recCard(r,false)).join('')
     : '<div class="empty">Inbox clear — every transcribed recording has been triaged.</div>';
+  $('#inboxTools').innerHTML = rows.length
+    ? selectAllBtn('recording','select all') + `<span class="faint">${rows.length} untriaged</span>`
+    : '';
+  paintSel();
 }
 
 async function loadLibrary(){
@@ -597,6 +636,7 @@ async function loadLibrary(){
   $('#libList').innerHTML = rows.length
     ? rows.map(r => recCard(r,true)).join('')
     : `<div class="empty">${h ? 'Nothing dismissed.' : 'Nothing matches.'}</div>`;
+  paintSel();
   // Say how many are hidden, so "quiet by default" never becomes "silently missing".
   try {
     const hid = await api('/api/recordings?hidden=true');
@@ -654,6 +694,102 @@ async function doSearch(){
     </div>`).join('')
     + `<p class="faint">Scores are cosine similarity, not confidence. There is no value below which a
        result is "wrong" — compare them to each other, and expect quality to fall off after the first few.</p>`;
+}
+
+// ---------------------------------------------------------------- bulk selection
+// One selection set, reset whenever the view changes — carrying a selection across
+// tabs invites acting on things you can no longer see, which is how bulk edits go
+// wrong. The bar only exists while something is selected.
+let SEL = new Set(), SEL_KIND = null;
+
+function clearSel(){ SEL.clear(); SEL_KIND = null; renderBulk(); paintSel(); }
+
+function toggleSel(id, kind, ev){
+  if (ev) ev.stopPropagation();
+  if (SEL_KIND && SEL_KIND !== kind) SEL.clear();
+  SEL_KIND = kind;
+  SEL.has(id) ? SEL.delete(id) : SEL.add(id);
+  renderBulk(); paintSel();
+}
+
+function selectAllVisible(kind){
+  const boxes = [...document.querySelectorAll(`.selbox[data-kind="${kind}"]`)];
+  const allOn = boxes.length && boxes.every(b => SEL.has(b.dataset.id));
+  if (SEL_KIND !== kind) SEL.clear();
+  SEL_KIND = kind;
+  boxes.forEach(b => allOn ? SEL.delete(b.dataset.id) : SEL.add(b.dataset.id));
+  renderBulk(); paintSel();
+}
+
+function paintSel(){
+  document.querySelectorAll('.selbox').forEach(b => {
+    const on = SEL.has(b.dataset.id);
+    b.checked = on;
+    b.closest('.card')?.classList.toggle('sel', on);
+  });
+}
+
+function renderBulk(){
+  const bar = $('#bulkbar');
+  if (!SEL.size){ bar.classList.remove('on'); return; }
+  bar.classList.add('on');
+  $('#bulkN').textContent = `${SEL.size} selected`;
+  $('#bulkActions').innerHTML = SEL_KIND === 'action'
+    ? `<button class="btn sm primary" onclick="bulkActions('accepted')">accept</button>
+       <button class="btn sm" onclick="bulkActions('in_progress')">start</button>
+       <button class="btn sm danger" onclick="bulkActions('dropped')">reject</button>`
+    : `<button class="btn sm danger" onclick="bulkRecordings('exclude')">dismiss</button>
+       <button class="btn sm" onclick="bulkRecordings('local')">local only</button>
+       <button class="btn sm primary" onclick="bulkRecordings('stack')">into stack</button>`;
+}
+
+function selBox(id, kind){
+  return `<input type="checkbox" class="selbox" data-id="${id}" data-kind="${kind}"
+    onclick="toggleSel('${id}','${kind}',event)" aria-label="select">`;
+}
+
+function selectAllBtn(kind, label){
+  return `<button class="btn sm" onclick="selectAllVisible('${kind}')"
+    title="Select or deselect everything currently listed">${label}</button>`;
+}
+
+async function bulkActions(status){
+  const ids = [...SEL];
+  const verb = {accepted:'Accept', in_progress:'Start', dropped:'Reject'}[status] || status;
+  // Rejecting is reversible (the rows stay, status becomes dropped) but it is still
+  // the one that removes things from view, so it asks.
+  if (status === 'dropped' && !confirm(
+      `Reject ${ids.length} proposal${ids.length===1?'':'s'}?\n\n`
+    + `Nothing is deleted — they move to "dropped" and stay visible under that filter, `
+    + `so you can bring any of them back.`)) return;
+  const r = await jpost('/api/actions/bulk', {ids, status});
+  clearSel();
+  await loadActions();
+  loadFreshness();
+  toast(`${verb}: ${r.updated} action${r.updated===1?'':'s'}`);
+}
+
+async function bulkRecordings(tier){
+  const ids = [...SEL];
+  if (tier === 'exclude' && !confirm(
+      `Dismiss ${ids.length} recording${ids.length===1?'':'s'} from the console?\n\n`
+    + `The audio and every verification fact stay on your drive untouched. They leave `
+    + `the console and the pipeline, and can be restored from "show dismissed".`)) return;
+  const r = await jpost('/api/recordings/bulk', {ids, tier});
+  clearSel();
+  await refresh();
+  loadFreshness();
+  toast(`${r.updated} recording${r.updated===1?'':'s'} → ${tier}`);
+}
+
+function toast(msg){
+  const el = document.createElement('div');
+  el.textContent = msg;
+  el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:50;'
+    + 'background:var(--panel);border:1px solid var(--success);color:var(--success);'
+    + 'border-radius:10px;padding:10px 16px;box-shadow:0 8px 30px rgba(0,0,0,.18)';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2600);
 }
 
 // ---------------------------------------------------------------- navigation
@@ -869,9 +1005,11 @@ function actionCard(a){
   else if (a.status === 'in_progress') btns = `<button class="btn sm primary" onclick="completeAction(${a.id})">Complete</button>`;
   return `<div class="card">
     <div class="row spread">
-      <div style="flex:1;min-width:240px">
-        <div>${esc(a.text)}</div>${src}${quote}
+      <div style="flex:1;min-width:240px;display:flex;align-items:flex-start">
+        ${selBox(a.id, 'action')}
+        <div style="flex:1"><div>${esc(a.text)}</div>${src}${quote}
         ${a.intent?`<div class="faint" style="margin-top:5px"><b>Intent:</b> ${esc(a.intent)}</div>`:''}
+        </div>
       </div>
       <div class="row">
         <span class="chip ${STATUS_CHIP[a.status]||''}">${a.status.replace('_',' ')}</span>
@@ -887,6 +1025,10 @@ async function loadActions(){
   if (!f) rows = rows.filter(a => a.status !== 'done' && a.status !== 'dropped');
   $('#actList').innerHTML = rows.length ? rows.map(actionCard).join('')
     : '<div class="empty">Nothing here.</div>';
+  $('#actTools').innerHTML = rows.length
+    ? selectAllBtn('action','select all') + `<span class="faint">${rows.length} shown</span>`
+    : '';
+  paintSel();
 }
 $('#actFilter').onchange = () => loadActions();
 
@@ -1086,6 +1228,23 @@ function renderTrends(){
   setNav(t.points.map(p => p.id), 'Trends', 'trends');
   if (!TREND_TABLE) wireChart();
 }
+
+async function loadArc(){
+  const btn = $('#arcBtn'), body = $('#arcBody');
+  btn.disabled = true; btn.textContent = 'clustering…';
+  try {
+    const r = await api('/api/arc?themes=' + $('#arcThemes').value);
+    body.innerHTML = r.empty
+      ? `<div class="empty" style="margin-top:12px">${esc(r.empty)}</div>`
+      : `<div class="storywrap" style="margin-top:12px">${r.svg}</div>`;
+    btn.textContent = 'redraw';
+  } catch(e){
+    body.innerHTML = `<div class="banner" style="margin-top:12px">${esc(e.message)}</div>`;
+    btn.textContent = 'draw it';
+  }
+  btn.disabled = false;
+}
+$('#arcThemes').onchange = () => { if ($('#arcBody').innerHTML.trim()) loadArc(); };
 
 function scaleKey(t){
   const sw = ['--pol-neg-2','--pol-neg-1','--pol-0','--pol-pos-1','--pol-pos-2']

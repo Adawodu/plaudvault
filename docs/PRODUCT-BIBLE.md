@@ -257,11 +257,11 @@ _Generated 2026-08-24 from git and the live archive._
 | | |
 |---|---|
 | Python modules | 23 |
-| Lines of Python | 5,505 |
-| Commits | 11 |
+| Lines of Python | 5,943 |
+| Commits | 12 |
 | CLI verbs | 20 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `store.py` (533), `web.py` (497), `story.py` (468), `cli.py` (439), `metrics.py` (320), `service.py` (283).
+Largest modules: `story.py` (804), `web.py` (579), `store.py` (533), `cli.py` (459), `metrics.py` (320), `service.py` (283).
 
 ### Live archive
 
@@ -289,6 +289,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-24 | Bulk edits, and the corpus drawn as themes over time |
 | 2026-08-24 | Draw a recording along its own duration, not as a grid of cards |
 | 2026-08-24 | Dismissing noise takes it out of the console and out of the pipeline |
 | 2026-08-24 | Refresh bible status after the archive grew |

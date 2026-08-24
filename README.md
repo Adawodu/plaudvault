@@ -140,6 +140,18 @@ Re-tier something out of *stack* and the copy is deleted on the next sync. The
 decision is enforced by what exists on disk, not by a flag downstream tools have to
 remember to respect.
 
+### Bulk edits
+
+Tick the checkbox on any card in the Inbox, Library or Actions and a bar appears with
+what you can do to the whole selection: triage or dismiss recordings, accept, start or
+reject proposals. **select all** takes everything currently listed, which respects the
+filter you are looking through.
+
+Every transition still goes through the same code path as a single edit, so each one is
+journalled to `action_events` individually — bulk is a convenience, never a shortcut past
+the audit trail. The selection resets when you change tabs, because acting on things you
+can no longer see is how bulk edits go wrong.
+
 ### Dismissing noise
 
 Not every recording deserves your attention. A thirty-second misfire, a pocket
@@ -284,6 +296,33 @@ downward rather than pushing labels up through the title.
 Two honest limits are printed on the picture itself: tone is an estimate over a
 transcript, and segment widths are **proportional, not measured** — sentiment chunks are
 equal slices of text, not equal slices of time.
+
+## What you keep coming back to
+
+The **Trends** tab also draws the whole corpus as one picture: themes over time, with the
+tone underneath. Or `plaudctl story --arc`.
+
+Themes come from **clustering the embeddings**, not from the summariser's tags. That is
+not a preference, it is what the data forced: 155 distinct tags across 31 summaries and
+only three recurring even three times, because the model invents fresh vocabulary every
+run. Tags cannot thread a story. Vectors can — two conversations about the same thing
+land near each other whatever words they happened to use.
+
+Each cluster is named by the words that **distinguish** it, not the words it uses most.
+Counting frequent words named every cluster *"it's · that's · don't"*, so a word is
+scored against how many clusters use it and one used by most of them is dropped outright.
+
+Two things the picture is deliberately honest about:
+
+- **The axis breaks.** Strict time-proportional spacing was tried and rejected: a
+  three-month gap swallowed 934 px of a 1180 px axis and squeezed the weeks that matter
+  into 250 px. The gap is now drawn as an explicit break, labelled with how many weeks
+  were recorded nothing — so the discontinuity is visible rather than smoothed away.
+- **Expect one or two themes to be junk.** Clustering finds structure whether or not the
+  structure means anything, and the caption on the picture says so.
+
+Clusters surface real vocabulary from real conversations, including names and raw
+language. Dismissed recordings are excluded, but nothing else is filtered.
 
 ## Tone, and the trend
 

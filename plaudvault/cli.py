@@ -125,6 +125,21 @@ def cmd_story(args, cfg) -> int:
     """Draw a recording along its own duration, as SVG or an editable Excalidraw scene."""
     import json as _json
 
+    import json as _json2
+    if args.arc:
+        with Store(cfg.db_path) as st:
+            model = story.arc_story(cfg, st, days=args.days, themes=args.themes)
+        if model.get("empty"):
+            print(f"  {model['empty']}")
+            return 1
+        out = Path(args.out) if args.out else Path("arc.svg")
+        out.write_text(story.arc_svg(model))
+        print(f"  {model['recordings']} recordings · {model['chunks']} passages · {model['span']}")
+        for t in model["themes"]:
+            print(f"    {t['share']*100:4.1f}%  {t['recordings']:2} recs  {t['name']}")
+        print(f"  wrote {out}")
+        return 0
+
     with Store(cfg.db_path) as st:
         rid = args.recording
         if not rid:
@@ -348,7 +363,8 @@ def main(argv=None) -> int:
         sp = sub.add_parser(name, help=help_)
         sp.set_defaults(fn=fn, limit=None, force=False, yes=False, probe=False, cloud=False,
                         suggestions=False, excluded=False, query='',
-                        recording=None, format='svg', out=None)
+                        recording=None, format='svg', out=None,
+                        arc=False, themes=8, days=None)
         return sp
 
     sp = add("login", cmd_login, "authenticate with Plaud (emailed one-time code)")
@@ -394,6 +410,10 @@ def main(argv=None) -> int:
     sp.add_argument("recording", nargs="?", help="recording id (default: most recently scored)")
     sp.add_argument("--format", choices=["svg", "excalidraw"], default="svg")
     sp.add_argument("--out", help="output path")
+    sp.add_argument("--arc", action="store_true",
+                    help="draw the whole corpus over time instead of one recording")
+    sp.add_argument("--themes", type=int, default=8, help="how many themes to cluster into")
+    sp.add_argument("--days", type=int, help="limit the arc to the last N days")
 
     add("tier", cmd_tier, "reconcile PLAUD/stack/ with your triage decisions")
 
