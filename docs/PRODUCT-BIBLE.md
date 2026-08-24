@@ -217,7 +217,7 @@ a mid-corpus change puts a seam in the trend that looks like a mood shift and is
 ## 5. Status
 
 <!-- BEGIN:STATUS (generated — do not edit by hand) -->
-_Generated 2026-08-23 from git and the live archive._
+_Generated 2026-08-24 from git and the live archive._
 
 ### Codebase
 
@@ -225,7 +225,7 @@ _Generated 2026-08-23 from git and the live archive._
 |---|---|
 | Python modules | 22 |
 | Lines of Python | 4,914 |
-| Commits | 8 |
+| Commits | 9 |
 | CLI verbs | 19 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
 Largest modules: `store.py` (508), `web.py` (444), `cli.py` (398), `metrics.py` (320), `service.py` (283), `extract.py` (264).
@@ -256,6 +256,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-24 | Refresh bible status after the archive grew |
 | 2026-08-23 | Drop the SHA column: a table cannot contain its own commit hash |
 | 2026-08-23 | Document the whole thing: three diagrams, a product bible, and a way to keep it current |
 | 2026-08-22 | Step between recordings without going back to the list |
