@@ -142,6 +142,8 @@ audio{width:100%;margin:10px 0}
     <button data-v="search">Search</button>
     <button data-v="library">Library</button>
     <button data-v="actions">Actions</button>
+    <button data-v="agents">Agents</button>
+    <button data-v="speakers">Speakers</button>
     <button data-v="trends">Trends</button>
     <button data-v="systems">Systems</button>
     <button data-v="measures">Measures</button>
@@ -215,6 +217,46 @@ audio{width:100%;margin:10px 0}
       <span id="actTools" class="row" style="gap:8px"></span>
     </div>
     <div id="actList"></div>
+  </section>
+
+  <section class="view" id="v-agents">
+    <h2>Agents</h2>
+    <p class="faint" style="max-width:70ch">Accepted actions you have handed to an agent.
+      plaudvault never runs the work — it writes the request and waits. The agent asks for its
+      queue over MCP, claims a job, does it in its own world, and reports back here. The report
+      is a <b>report</b>: closing the action stays your decision.</p>
+    <div class="row" style="margin:12px 0">
+      <select id="dspAgent" style="max-width:180px"><option value="">every agent</option></select>
+      <select id="dspStatus" style="max-width:180px">
+        <option value="">every status</option>
+        <option value="queued">queued</option>
+        <option value="claimed">claimed</option>
+        <option value="done">done</option>
+        <option value="failed">failed</option>
+        <option value="cancelled">cancelled</option>
+      </select>
+      <span class="faint" id="dspCount"></span>
+    </div>
+    <div id="dspList"></div>
+  </section>
+
+  <section class="view" id="v-speakers">
+    <h2>Speakers</h2>
+    <p class="faint" style="max-width:70ch">Diarization splits each recording into anonymous
+      voices. Naming one keeps its voiceprint, so the same person is recognised in every later
+      recording — you name yourself once, and the archive knows which words are yours from then
+      on. A machine match is always shown as a guess; only what you confirm builds a voiceprint.</p>
+    <div id="spkStatus"></div>
+    <div class="row" style="margin:14px 0">
+      <input id="spkNew" placeholder="Add a person by name…" style="max-width:260px">
+      <input id="spkRef" placeholder="Contact / CRM ref (optional)" style="max-width:230px">
+      <button class="btn" onclick="newSpeaker()">Add</button>
+      <button class="btn" onclick="rematchSpeakers()" id="spkRematch"
+        title="Re-run voiceprint matching over every unnamed voice">Re-match unnamed voices</button>
+    </div>
+    <div id="spkList"></div>
+    <h2 style="margin-top:26px">Voices with no name</h2>
+    <div id="spkUnknown"></div>
   </section>
 
   <section class="view" id="v-trends">
@@ -397,6 +439,72 @@ audio{width:100%;margin:10px 0}
       folds them back in.</p>
     </div>
 
+    <h2>Titles, and why the model writes them</h2>
+    <div class="card">
+      <p>Plaud names a file after the clock — <span class="mono">2026-07-14 09:12</span>. Accurate,
+      and useless: thirty rows of timestamps tell you nothing about which one was the call with the
+      lawyer. After a recording is summarized, the model reads that summary and proposes a name.</p>
+      <p>It is a proposal like everything else here. Press <b>rename</b> on any recording to write
+      your own, and a title you wrote is never overwritten by a re-run — clear the box instead to
+      hand it back to the model. The device's filename is always shown alongside, so a title you
+      disagree with never hides what the file actually is. When the model cannot find a subject it
+      says so and leaves the recording unnamed, rather than filing it as "Business Discussion".</p>
+    </div>
+
+    <h2>Who is speaking</h2>
+    <div class="card">
+      <p>Transcription alone produces one undifferentiated monologue, which costs more than
+      readability: an extracted commitment has an owner the model can only guess at.
+      <b>Diarization</b> splits the audio by voice into <span class="mono">SPEAKER_00</span>,
+      <span class="mono">SPEAKER_01</span> and so on, and the transcript starts saying who is
+      talking.</p>
+      <p>Those labels are per-recording and useless across an archive —
+      <span class="mono">SPEAKER_00</span> is a different person in every file. So when you name a
+      voice, the <b>voiceprint</b> behind it is kept, and the next recording matches against it.
+      Every recording here is yours, so the cheapest first move is to confirm yourself once; from
+      then on the archive knows which words are yours.</p>
+      <p>Two rules keep that honest. <b>Only your confirmations build a voiceprint</b> — an
+      automatic match is drawn as a guess and never feeds back into the mean, because otherwise
+      one bad match slowly becomes somebody's identity with nothing in the data saying when it went
+      wrong. And <b>re-running diarization never un-names anybody</b>: your decision lives in its
+      own column, exactly as triage survives a re-sync.</p>
+      <p>Each person can carry a <b>contact reference</b> — an opaque id pointing at whatever
+      system holds the rest of that relationship. plaudvault never has to know whose CRM it is; it
+      just carries the string, and an agent asking <span class="mono">list_speakers</span> can join
+      a voice to a contact record.</p>
+      <p>Setup costs something real: the pyannote models are free but gated, so you accept a
+      licence on HuggingFace and store a token. The <b>Speakers</b> tab says exactly what is
+      missing. Everything else here works without it.</p>
+    </div>
+
+    <h2>Handing work to an agent</h2>
+    <div class="card">
+      <p>An accepted action can be assigned to an agent — OpenClaw, a Claude session, anything that
+      speaks MCP. <b>plaudvault never runs the work.</b> It writes the request and waits. The agent
+      asks for its queue, claims a job so no two agents do the same thing, does the work in its own
+      world, and reports back to the <b>Agents</b> tab.</p>
+      <p>Only an <b>accepted</b> action can be handed over, and there is no flag to skip that. The
+      extractor is measured to over-propose, so requiring acceptance means a human read the quote
+      before anything could act on it. The quote travels with the job for the same reason: an agent
+      told to "set up the meeting" with no source cannot tell a real commitment from a garbled one.</p>
+      <p>A finished job is a <b>report</b>, not a completion. The result lands on the dispatch row
+      and the action stays open — an agent that believes it booked a meeting and did not must not
+      be able to tick the box itself.</p>
+    </div>
+
+    <h2>Asking the archive from somewhere else</h2>
+    <div class="card">
+      <p><span class="mono">plaudctl mcp</span> serves this archive to any MCP client on this
+      machine over stdio. Search returns <b>cited passages</b> — recording, timestamp, and the
+      words themselves — and the client's model does the synthesis, because a paraphrase with no
+      timestamp is exactly the thing you cannot check.</p>
+      <p>Tier is enforced there and nowhere else. <span class="mono">mcp_tier_scope</span> decides
+      what a client may read; <span class="mono">exclude</span> is unreachable through every path
+      regardless, and audio is never served. Run
+      <span class="mono">plaudctl mcp --tiers stack</span> to hand a particular client a narrower
+      view than this console has.</p>
+    </div>
+
     <h2>Is the vault up to date?</h2>
     <div class="card">
       <p>The pill in the header answers it at a glance, and opens the full breakdown. "Up to
@@ -484,7 +592,7 @@ function show(v){
   renderBulk();
   ({inbox:loadInbox, search:loadSearch, library:loadLibrary, actions:loadActions,
     trends:loadTrends, vault:loadVault, systems:loadSystems, measures:loadMeasures,
-    help:loadSettings}[v]||(()=>{}))();
+    agents:loadDispatch, speakers:loadSpeakers, help:loadSettings}[v]||(()=>{}))();
 }
 document.querySelectorAll('nav button[data-v]').forEach(b => b.onclick = () => show(b.dataset.v));
 
@@ -562,12 +670,17 @@ function renderVault(){
          <p class="faint">Run <span class="mono">plaudctl tier</span>, or triage any recording — both reconcile it.</p>`
       : `<div><span class="chip good">in step</span> ${s.approved} transcripts approved and present.</div>`}</div>`);
 
-  if (f.untriaged || f.proposed_actions) rows.push(`<div class="card"><h3>Waiting on you</h3>
+  if (f.untriaged || f.proposed_actions || f.unnamed_voices || f.unreviewed_dispatches)
+    rows.push(`<div class="card"><h3>Waiting on you</h3>
     <p class="faint">Not counted against "up to date" — the machine has done its part.</p>
     ${f.untriaged?`<div>${f.untriaged} recordings untriaged${f.oldest_untriaged_days?`, oldest ${f.oldest_untriaged_days} days`:''}
       <button class="btn sm" style="margin-left:8px" onclick="show('inbox')">Triage</button></div>`:''}
     ${f.proposed_actions?`<div style="margin-top:7px">${f.proposed_actions} proposed actions awaiting review
-      <button class="btn sm" style="margin-left:8px" onclick="show('actions')">Review</button></div>`:''}</div>`);
+      <button class="btn sm" style="margin-left:8px" onclick="show('actions')">Review</button></div>`:''}
+    ${f.unnamed_voices?`<div style="margin-top:7px">${f.unnamed_voices} voices with no name across ${f.unnamed_recordings} recordings
+      <button class="btn sm" style="margin-left:8px" onclick="show('speakers')">Name them</button></div>`:''}
+    ${f.unreviewed_dispatches?`<div style="margin-top:7px">${f.unreviewed_dispatches} agent reports you have not read
+      <button class="btn sm" style="margin-left:8px" onclick="show('agents')">Read them</button></div>`:''}</div>`);
 
   rows.push(`<div class="card"><h3>Last full run</h3>${
     f.last_run_iso
@@ -593,8 +706,10 @@ function recCard(r, showTier){
     <div class="row spread">
       <div style="flex:1;min-width:250px;display:flex;align-items:flex-start">
         ${selBox(r.id, 'recording')}
-        <div><h3>${esc(r.filename)}</h3>
-        <div class="faint">${r.started_iso} · ${r.duration_min} min</div></div>
+        <div><h3>${esc(r.display)}</h3>
+        <div class="faint">${r.started_iso} · ${r.duration_min} min${
+          r.display !== r.filename ? ' · <span class="mono">'+esc(r.filename)+'</span>' : ''}</div>
+        ${speakerChips(r.speakers)}</div>
       </div>
       <div class="row">${showTier?tier:''}${prune}${tone}${acts}${open}
         <button class="btn sm" onclick="openRec('${r.id}')">Open</button>
@@ -855,8 +970,12 @@ async function openRec(id, atMs){
   const sum = r.summary ? mdToHtml(r.summary) : '<p class="faint">No summary.</p>';
 
   $('#detail').innerHTML = `
-    <h2 style="margin-top:14px">${esc(r.filename)}</h2>
-    <div class="faint" style="margin-bottom:10px">${r.started_iso} · ${r.duration_min} min · ${esc(r.transcribe_model||'')}</div>
+    <h2 style="margin-top:14px">${esc(r.display)}
+      <button class="btn sm" style="vertical-align:middle" onclick="editTitle()"
+        title="Rename this recording">rename</button></h2>
+    <div class="faint" style="margin-bottom:10px">${r.started_iso} · ${r.duration_min} min · ${esc(r.transcribe_model||'')}
+      ${r.title ? ' · titled by '+(r.title_source==='human'?'you':'the model') : ''}
+      ${r.display !== r.filename ? ' · <span class="mono">'+esc(r.filename)+'</span>' : ''}</div>
     <audio id="au" controls preload="none" src="/api/recordings/${r.id}/audio"></audio>
 
     <div class="card">
@@ -876,6 +995,8 @@ async function openRec(id, atMs){
     </div>
 
     ${sentimentCard(r.sentiment)}
+
+    ${speakerCard(r)}
 
     <div class="card" id="storyCard">
       <div class="row spread">
@@ -1003,6 +1124,14 @@ function actionCard(a){
   else if (a.status === 'accepted') btns = `<button class="btn sm" onclick="setStatus(${a.id},'in_progress')">Start</button>
       <button class="btn sm primary" onclick="completeAction(${a.id})">Complete</button>`;
   else if (a.status === 'in_progress') btns = `<button class="btn sm primary" onclick="completeAction(${a.id})">Complete</button>`;
+  // Only an accepted action can be handed over: `proposed` is the extractor's guess,
+  // and the extractor is measured to over-propose. Requiring acceptance means a human
+  // read the quote before anything could act on it.
+  if (a.status === 'accepted' || a.status === 'in_progress')
+    btns += ` <button class="btn sm" onclick="assignAction(${a.id})" title="Hand this to an agent">Assign</button>`;
+  const disp = (a.dispatches||[]).map(d => `<span class="chip ${
+      {queued:'warn', claimed:'gold', done:'good', failed:'bad'}[d.status]||''}"
+      title="${esc(d.result||d.error||'')}">${esc(d.agent)}: ${d.status}</span>`).join('');
   return `<div class="card">
     <div class="row spread">
       <div style="flex:1;min-width:240px;display:flex;align-items:flex-start">
@@ -1014,7 +1143,7 @@ function actionCard(a){
       <div class="row">
         <span class="chip ${STATUS_CHIP[a.status]||''}">${a.status.replace('_',' ')}</span>
         ${a.overdue?'<span class="chip bad">overdue</span>':''}
-        ${due?`<span class="chip">due ${due}</span>`:''}${score}${sys}${btns}
+        ${due?`<span class="chip">due ${due}</span>`:''}${score}${sys}${disp}${btns}
       </div>
     </div></div>`;
 }
@@ -1092,6 +1221,273 @@ async function doAdd(){
 
 async function refresh(){
   if (VIEW === 'detail' && CUR) await openRec(CUR.id); else show(VIEW);
+}
+
+// ---------------------------------------------------------------- titles
+// A title the machine wrote is a proposal like everything else here. Clearing the
+// box hands the recording back to the pipeline to name again; typing one marks it
+// as yours, and `plaudctl title --force` will never overwrite it.
+function editTitle(){
+  const r = CUR;
+  dlg(`<h2 style="margin-top:0">Rename this recording</h2>
+    <p class="faint">The device called it <span class="mono">${esc(r.filename)}</span>, which is
+      accurate and useless. A title you write is never overwritten by a re-run; clear the box to
+      let the model try again.</p>
+    <div class="field"><label>Title</label>
+      <input id="dTitle" value="${esc(r.title||'')}" placeholder="what this recording is"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="closeDlg()">Cancel</button>
+      <button class="btn primary" onclick="saveTitle()">Save</button></div>`);
+  setTimeout(()=>$('#dTitle').focus(), 30);
+}
+async function saveTitle(){
+  await jpost(`/api/recordings/${CUR.id}/title`, {title: $('#dTitle').value}, 'PATCH');
+  closeDlg(); await refresh(); loadFreshness();
+}
+
+// ---------------------------------------------------------------- speakers
+function speakerChips(list){
+  if (!list || !list.length) return '';
+  return `<div class="row" style="gap:5px;margin-top:6px">` + list.map(sp => {
+    if (!sp.name) return `<span class="chip" title="unnamed voice, ${sp.minutes} min"
+      style="opacity:.65">${esc(sp.label)}</span>`;
+    // A machine match is drawn as a guess, deliberately: an automatic attribution that
+    // looks identical to one you confirmed is how a wrong identity becomes invisible.
+    return `<span class="chip ${sp.is_me?'gold':''}"
+      title="${sp.source==='voiceprint'?'matched by voiceprint at '+(sp.confidence||0).toFixed(2)+' — a guess':'you confirmed this'} · ${sp.minutes} min"
+      >${esc(sp.name)}${sp.source==='voiceprint'?' ?':''}</span>`;
+  }).join('') + `</div>`;
+}
+
+function speakerCard(r){
+  const list = r.speakers || [];
+  if (!list.length) return `<div class="card"><h3>Speakers</h3>
+    <div class="faint">Not split by speaker yet. Run <span class="mono">plaudctl diarize</span> —
+      it needs the pyannote models, which are free but gated behind a HuggingFace licence.
+      <button class="btn sm" onclick="show('speakers')">set it up</button></div></div>`;
+  return `<div class="card"><div class="row spread">
+      <div><h3>Speakers</h3><div class="faint">Who is talking, and for how long. Naming a voice
+        here teaches the archive that person everywhere.</div></div>
+      <button class="btn sm" onclick="show('speakers')">manage people</button></div>
+    <table style="margin-top:10px"><thead><tr><th>Voice</th><th>Who</th><th>Speaking</th><th></th></tr></thead>
+    <tbody>${list.map(sp => `<tr>
+      <td class="mono">${esc(sp.label)}</td>
+      <td>${sp.name
+        ? `<b>${esc(sp.name)}</b>${sp.is_me?' <span class="chip gold">you</span>':''}${
+            sp.source==='voiceprint'
+              ? ` <span class="chip warn" title="cosine ${(sp.confidence||0).toFixed(2)}">guess</span>`
+              : ' <span class="chip good">confirmed</span>'}`
+        : '<span class="faint">unnamed</span>'}</td>
+      <td class="muted">${sp.minutes} min</td>
+      <td><button class="btn sm" onclick="nameLabel('${r.id}','${esc(sp.label)}')">${
+        sp.name ? 'change' : 'name'}</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+async function nameLabel(recId, label){
+  const s = await api('/api/speakers');
+  dlg(`<h2 style="margin-top:0">Who is ${esc(label)}?</h2>
+    <p class="faint">Confirming this stores the voice as that person's voiceprint, so the next
+      recording finds them without asking. Only your confirmations build a voiceprint — machine
+      matches never do, or one bad guess would slowly become somebody's identity.</p>
+    <div class="field"><label>An existing person</label>
+      <select id="dSpk"><option value="">—</option>${s.speakers.map(p =>
+        `<option value="${p.id}">${esc(p.name)}${p.is_me?' (you)':''}${
+          p.has_voiceprint?' · voiceprint from '+p.voiceprint_n:''}</option>`).join('')}</select></div>
+    <div class="field"><label>…or somebody new</label>
+      <input id="dSpkNew" placeholder="their name"></div>
+    <div class="field"><label>Contact / CRM reference (optional)</label>
+      <input id="dSpkRef" placeholder="e.g. clarify:rec_123"></div>
+    <label style="display:flex;align-items:center;gap:7px;font-size:13px">
+      <input type="checkbox" id="dSpkMe" style="width:auto"> this voice is me</label>
+    <div class="row" style="justify-content:space-between;margin-top:14px">
+      <button class="btn" onclick="clearLabel('${recId}','${esc(label)}')"
+        title="Take the name off this voice">un-name</button>
+      <span><button class="btn" onclick="closeDlg()">Cancel</button>
+      <button class="btn primary" onclick="saveLabel('${recId}','${esc(label)}')">Confirm</button></span>
+    </div>`);
+}
+async function saveLabel(recId, label){
+  const sel = $('#dSpk').value, name = $('#dSpkNew').value.trim();
+  if (!sel && !name) return;
+  await jpost(`/api/recordings/${recId}/speakers/${encodeURIComponent(label)}`,
+    sel ? {speaker_id: Number(sel)}
+        : {name, is_me: $('#dSpkMe').checked, external_ref: $('#dSpkRef').value.trim()});
+  closeDlg(); await refresh(); loadFreshness();
+}
+async function clearLabel(recId, label){
+  await jpost(`/api/recordings/${recId}/speakers/${encodeURIComponent(label)}`, {});
+  closeDlg(); await refresh(); loadFreshness();
+}
+
+async function loadSpeakers(){
+  const s = await api('/api/speakers');
+  $('#spkStatus').innerHTML = s.ready
+    ? `<div class="faint">Diarization ready — ${esc(s.detail)}. A voice is auto-matched to a known
+        person above <b>${s.threshold}</b> cosine similarity.</div>`
+    : `<div class="banner"><b>Diarization is not set up.</b> ${esc(s.detail)}<br>
+        The models are free but gated: accept the licence at ${s.gated_models.map(m =>
+        `<a href="https://hf.co/${m}" target="_blank" rel="noopener" class="mono">${esc(m)}</a>`).join(' and ')},
+        then run <span class="mono">plaudctl speakers login</span> and
+        <span class="mono">plaudctl diarize</span>.</div>`;
+
+  $('#spkList').innerHTML = s.speakers.length ? `<table><thead><tr>
+      <th>Person</th><th>Recordings</th><th>Voiceprint</th><th>Contact ref</th><th></th>
+    </tr></thead><tbody>${s.speakers.map(p => `<tr>
+      <td><b>${esc(p.name)}</b>${p.is_me?' <span class="chip gold">you</span>':''}</td>
+      <td class="muted">${p.recordings}</td>
+      <td class="muted">${p.has_voiceprint
+        ? `from ${p.voiceprint_n} confirmed`
+        : '<span class="faint">none — confirm them in a recording</span>'}</td>
+      <td class="mono muted">${esc(p.external_ref||'—')}</td>
+      <td class="row" style="gap:5px">
+        <button class="btn sm" onclick="editSpeaker(${p.id})">edit</button>
+        <button class="btn sm" onclick="deleteSpeaker(${p.id},'${esc(p.name)}')">forget</button>
+      </td></tr>`).join('')}</tbody></table>`
+    : `<div class="empty">Nobody named yet. Every recording here is yours, so the cheapest first
+        move is to open one, find the voice that talks most, and confirm it as you.</div>`;
+
+  $('#spkUnknown').innerHTML = s.unknown.length ? `<table><thead><tr>
+      <th>Recording</th><th>Voice</th><th>Speaking</th><th>When</th><th></th>
+    </tr></thead><tbody>${s.unknown.map(u => `<tr>
+      <td><a href="#" onclick="openRec('${u.recording_id}');return false">${esc(u.recording)}</a></td>
+      <td class="mono">${esc(u.label)}</td><td class="muted">${u.minutes} min</td>
+      <td class="muted">${u.recorded_iso}</td>
+      <td><button class="btn sm" onclick="nameLabel('${u.recording_id}','${esc(u.label)}')">name</button></td>
+    </tr>`).join('')}</tbody></table>`
+    : `<div class="empty">${s.ready
+        ? 'Every diarized voice has a name.'
+        : 'Nothing diarized yet.'}</div>`;
+}
+
+async function newSpeaker(){
+  const name = $('#spkNew').value.trim(); if (!name) return;
+  await jpost('/api/speakers', {name, external_ref: $('#spkRef').value.trim()});
+  $('#spkNew').value = $('#spkRef').value = ''; loadSpeakers();
+}
+
+async function editSpeaker(id){
+  const s = await api('/api/speakers');
+  const p = s.speakers.find(x => x.id === id); if (!p) return;
+  dlg(`<h2 style="margin-top:0">Edit ${esc(p.name)}</h2>
+    <p class="faint">Renaming rewrites this person's name in every transcript they appear in.</p>
+    <div class="field"><label>Name</label><input id="dEName" value="${esc(p.name)}"></div>
+    <div class="field"><label>Contact / CRM reference</label>
+      <input id="dERef" value="${esc(p.external_ref||'')}" placeholder="e.g. clarify:rec_123"></div>
+    <div class="field"><label>Note</label><input id="dENote" value="${esc(p.note||'')}"></div>
+    <label style="display:flex;align-items:center;gap:7px;font-size:13px">
+      <input type="checkbox" id="dEMe" style="width:auto" ${p.is_me?'checked':''}> this person is me</label>
+    <div class="row" style="justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="closeDlg()">Cancel</button>
+      <button class="btn primary" onclick="saveSpeaker(${id})">Save</button></div>`);
+}
+async function saveSpeaker(id){
+  await jpost('/api/speakers/'+id, {
+    name: $('#dEName').value, external_ref: $('#dERef').value,
+    note: $('#dENote').value, is_me: $('#dEMe').checked}, 'PATCH');
+  closeDlg(); loadSpeakers();
+}
+
+async function deleteSpeaker(id, name){
+  if (!confirm(`Forget ${name}? Their voiceprint goes; every voice attributed to them becomes `
+    + `unnamed again. No audio or transcript is deleted.`)) return;
+  await jpost('/api/speakers/'+id, {}, 'DELETE');
+  loadSpeakers(); loadFreshness();
+}
+
+// What you press after naming somebody for the first time: the voiceprint that did not
+// exist when those recordings were diarized exists now.
+async function rematchSpeakers(){
+  const b = $('#spkRematch'); b.disabled = true; b.textContent = 'matching…';
+  try {
+    const r = await jpost('/api/speakers/rematch', {});
+    b.textContent = `matched ${r.matched} of ${r.considered}`;
+  } catch(e){ b.textContent = 'failed'; }
+  setTimeout(()=>{ b.disabled = false; b.textContent = 'Re-match unnamed voices'; loadSpeakers(); }, 1600);
+}
+
+// ---------------------------------------------------------------- agents
+async function assignAction(id){
+  const d = await api('/api/dispatch');
+  if (!d.agents.length){
+    dlg(`<h2 style="margin-top:0">No agents configured</h2>
+      <p class="faint">Set <span class="mono">agents</span> in the config file — a comma-separated
+      list, e.g. <span class="mono">agents = "openclaw,claude"</span>. An allow-list means a typo
+      cannot park a job in a queue nobody polls.</p>
+      <div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeDlg()">OK</button></div>`);
+    return;
+  }
+  dlg(`<h2 style="margin-top:0">Hand this to an agent</h2>
+    <p class="faint">plaudvault writes the request and waits — it never executes anything. The
+      agent picks it up over MCP, does the work in its own world, and reports back. Closing the
+      action stays yours.</p>
+    <div class="field"><label>Agent</label>
+      <select id="dAgent">${d.agents.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join('')}</select></div>
+    <div class="field"><label>Instructions — anything it needs beyond the action itself</label>
+      <textarea id="dInstr" placeholder="e.g. propose three times next week, 30 min, and send the invite from my work address"></textarea></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="closeDlg()">Cancel</button>
+      <button class="btn primary" onclick="doAssign(${id})">Assign</button></div>`);
+}
+async function doAssign(id){
+  try {
+    await jpost('/api/dispatch', {action_id:id, agent:$('#dAgent').value,
+                                  instructions:$('#dInstr').value});
+  } catch(e){
+    $('#dlgBody').innerHTML = `<div class="banner">${esc(e.message)}</div>
+      <div class="row" style="justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="closeDlg()">Close</button></div>`;
+    return;
+  }
+  closeDlg(); await refresh(); loadFreshness();
+}
+
+async function loadDispatch(){
+  const agent = $('#dspAgent').value, status = $('#dspStatus').value;
+  const q = [agent && 'agent='+encodeURIComponent(agent), status && 'status='+status]
+    .filter(Boolean).join('&');
+  const d = await api('/api/dispatch' + (q?'?'+q:''));
+
+  const sel = $('#dspAgent');
+  if (sel.options.length <= 1)
+    sel.innerHTML = '<option value="">every agent</option>' +
+      d.agents.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join('');
+
+  $('#dspCount').innerHTML = `${d.summary.open} open · ${d.summary.unreviewed} finished and unread`;
+  $('#dspList').innerHTML = d.dispatches.length ? d.dispatches.map(x => {
+    const chip = {queued:'warn', claimed:'gold', done:'good', failed:'bad', cancelled:''}[x.status]||'';
+    const unread = (x.status==='done'||x.status==='failed') && !x.reviewed_at;
+    return `<div class="card">
+      <div class="row spread">
+        <div style="flex:1;min-width:260px">
+          <div><b>${esc(x.task)}</b></div>
+          <div class="faint">${esc(x.agent)} · queued ${x.created_iso}${
+            x.claimed_by?' · claimed by '+esc(x.claimed_by):''}${
+            x.evidence.recording?' · from '+esc(x.evidence.recording):''}</div>
+          ${x.instructions?`<div class="faint" style="margin-top:5px"><b>You asked:</b> ${esc(x.instructions)}</div>`:''}
+          ${x.evidence.quote?`<div class="faint" style="font-style:italic;margin-top:5px">“${esc(x.evidence.quote)}”</div>`:''}
+          ${x.result?`<div style="margin-top:8px;padding:9px 11px;border-left:2px solid var(--gold)">
+            <div class="faint" style="margin-bottom:3px">The agent reported</div>${esc(x.result)}</div>`:''}
+          ${x.error?`<div style="margin-top:8px;padding:9px 11px;border-left:2px solid var(--bad,#b4553f)">
+            <div class="faint" style="margin-bottom:3px">It could not finish</div>${esc(x.error)}</div>`:''}
+        </div>
+        <div class="row">
+          <span class="chip ${chip}">${esc(x.status)}</span>
+          ${unread?'<span class="chip warn">unread</span>':''}
+          ${x.evidence.recording_id?`<button class="btn sm" onclick="openRec('${x.evidence.recording_id}')">recording</button>`:''}
+          ${unread?`<button class="btn sm primary" onclick="dspVerb(${x.dispatch_id},'review')">mark read</button>`:''}
+          ${(x.status==='queued'||x.status==='claimed')?`<button class="btn sm" onclick="dspVerb(${x.dispatch_id},'cancel')">withdraw</button>`:''}
+        </div>
+      </div></div>`;
+  }).join('') : `<div class="empty">Nothing dispatched. Accept an action, then press
+      <b>Assign</b> on it.</div>`;
+}
+$('#dspAgent').onchange = () => loadDispatch();
+$('#dspStatus').onchange = () => loadDispatch();
+
+async function dspVerb(id, verb){
+  await jpost(`/api/dispatch/${id}/${verb}`, {});
+  loadDispatch(); loadFreshness();
 }
 
 // ---------------------------------------------------------------- systems

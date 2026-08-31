@@ -138,6 +138,68 @@ CREATE TABLE IF NOT EXISTS action_events (
     note      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_action ON action_events(action_id);
+
+-- A person whose voice this archive knows. `voiceprint` is the mean speaker
+-- embedding over every turn ever confirmed as theirs, so naming somebody once
+-- carries forward: the next recording matches by voice rather than asking again.
+-- `is_me` marks the archive owner — every recording is theirs, so that one is
+-- worth knowing for free. `external_ref` is where a CRM/contact id goes; it is
+-- deliberately opaque text so plaudvault never has to know whose CRM it is.
+CREATE TABLE IF NOT EXISTS speakers (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL UNIQUE,
+    is_me         INTEGER NOT NULL DEFAULT 0,
+    external_ref  TEXT,               -- 'clarify:rec_123', 'contacts:ABCD', ...
+    note          TEXT,
+    voiceprint    BLOB,               -- float32 mean embedding, or NULL
+    voiceprint_dim INTEGER,
+    voiceprint_n  INTEGER NOT NULL DEFAULT 0,  -- turns the mean was built from
+    voiceprint_model TEXT,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER
+);
+
+-- One row per anonymous diarization label per recording. The label ('SPEAKER_00')
+-- is what the diarizer produced and never changes; `speaker_id` is the human or
+-- voiceprint judgement laid over it, and can be corrected at any time without
+-- re-running diarization. `source` records WHO decided, so a machine guess is
+-- never mistaken for a confirmation.
+CREATE TABLE IF NOT EXISTS recording_speakers (
+    recording_id TEXT NOT NULL REFERENCES recordings(id),
+    label        TEXT NOT NULL,       -- 'SPEAKER_00'
+    speaker_id   INTEGER REFERENCES speakers(id),
+    source       TEXT NOT NULL DEFAULT 'unassigned',  -- unassigned|voiceprint|human
+    confidence   REAL,                -- cosine to the matched voiceprint
+    seconds      REAL NOT NULL DEFAULT 0,   -- how long this label spoke
+    turns        INTEGER NOT NULL DEFAULT 0,
+    embedding    BLOB,                -- this label's mean embedding in THIS recording
+    embedding_dim INTEGER,
+    decided_at   INTEGER,
+    PRIMARY KEY (recording_id, label)
+);
+CREATE INDEX IF NOT EXISTS idx_recspk_speaker ON recording_speakers(speaker_id);
+
+-- An accepted action handed to an agent to execute. Separate from `actions`
+-- because the assignment has its own lifecycle: an agent claims it, works, and
+-- reports back, and the report is a PROPOSAL the human still closes. Nothing is
+-- ever dispatched that a human did not accept first.
+CREATE TABLE IF NOT EXISTS dispatch (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id    INTEGER NOT NULL REFERENCES actions(id),
+    agent        TEXT NOT NULL,       -- 'openclaw', 'claude', free text
+    status       TEXT NOT NULL DEFAULT 'queued',
+                 -- queued | claimed | done | failed | cancelled
+    instructions TEXT,                -- what the human wants done, beyond action.text
+    result       TEXT,                -- what the agent reported
+    error        TEXT,
+    claimed_by   TEXT,                -- session/instance that claimed it
+    created_at   INTEGER NOT NULL,
+    claimed_at   INTEGER,
+    finished_at  INTEGER,
+    reviewed_at  INTEGER              -- human saw the result
+);
+CREATE INDEX IF NOT EXISTS idx_dispatch_agent  ON dispatch(agent, status);
+CREATE INDEX IF NOT EXISTS idx_dispatch_action ON dispatch(action_id);
 """
 
 # Applied after SCHEMA, guarded — lets an existing manifest.sqlite gain columns.
@@ -152,6 +214,14 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # would re-scan the same unscorable clips forever.
     ("recordings", "sentiment_at", "ALTER TABLE recordings ADD COLUMN sentiment_at INTEGER"),
     ("recordings", "indexed_at", "ALTER TABLE recordings ADD COLUMN indexed_at INTEGER"),
+    # A title the archive chose (or you did), as opposed to the date-stamped
+    # filename Plaud's device produced. `title_source` keeps a hand-written title
+    # from ever being overwritten by a re-run.
+    ("recordings", "title", "ALTER TABLE recordings ADD COLUMN title TEXT"),
+    ("recordings", "title_source", "ALTER TABLE recordings ADD COLUMN title_source TEXT"),
+    ("recordings", "titled_at", "ALTER TABLE recordings ADD COLUMN titled_at INTEGER"),
+    ("recordings", "diarized_at", "ALTER TABLE recordings ADD COLUMN diarized_at INTEGER"),
+    ("recordings", "diarize_model", "ALTER TABLE recordings ADD COLUMN diarize_model TEXT"),
 ]
 
 
@@ -522,6 +592,235 @@ class Store:
         return self.db.execute(
             "SELECT * FROM systems WHERE retired_at IS NULL ORDER BY name"
         ).fetchall()
+
+    # ------------------------------------------------------------------ titles
+
+    def needing_title(self) -> list[sqlite3.Row]:
+        """Transcribed and never looked at by the titler.
+
+        Keyed on `titled_at`, not on `title`, for the same reason `sentiment_at`
+        exists: a recording the model *looked at* and could not name must not come
+        back every run, or the pipeline pays for a call that can never succeed. The
+        console clears `titled_at` along with the title, so asking for another
+        attempt is still one click.
+
+        Requires a transcript rather than a summary: recordings under
+        `summarize_min_seconds` never get summarized, and a two-minute voice memo is
+        exactly the thing whose date-stamped filename tells you nothing.
+        """
+        return self.db.execute(
+            f"SELECT r.* FROM recordings r WHERE r.transcript_path IS NOT NULL "
+            f"AND r.titled_at IS NULL AND {self.NOT_EXCLUDED} "
+            "ORDER BY r.started_at DESC"
+        ).fetchall()
+
+    def mark_title_attempted(self, rec_id: str) -> None:
+        """The titler looked and declined. Records the visit, leaves the title unset."""
+        self.db.execute(
+            "UPDATE recordings SET titled_at = ? WHERE id = ?", (int(time.time()), rec_id)
+        )
+        self.db.commit()
+
+    def set_title(self, rec_id: str, title: str, *, source: str) -> None:
+        if source not in ("model", "human"):
+            raise ValueError(f"unknown title source {source!r}")
+        self.db.execute(
+            "UPDATE recordings SET title = ?, title_source = ?, titled_at = ? WHERE id = ?",
+            (title.strip()[:200], source, int(time.time()), rec_id),
+        )
+        self.db.commit()
+
+    # ------------------------------------------------------------------ speakers
+
+    def add_speaker(self, name: str, *, is_me: bool = False, external_ref: str = "",
+                    note: str = "") -> int:
+        now = int(time.time())
+        self.db.execute(
+            "INSERT INTO speakers (name, is_me, external_ref, note, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
+            "is_me = excluded.is_me, "
+            "external_ref = COALESCE(NULLIF(excluded.external_ref, ''), speakers.external_ref), "
+            "note = COALESCE(NULLIF(excluded.note, ''), speakers.note), "
+            "updated_at = excluded.updated_at",
+            (name.strip(), int(is_me), external_ref.strip(), note.strip(), now, now),
+        )
+        self.db.commit()
+        return self.db.execute(
+            "SELECT id FROM speakers WHERE name = ?", (name.strip(),)
+        ).fetchone()[0]
+
+    def speakers(self) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT s.*, "
+            "(SELECT COUNT(*) FROM recording_speakers rs WHERE rs.speaker_id = s.id) AS recordings "
+            "FROM speakers s ORDER BY s.is_me DESC, s.name"
+        ).fetchall()
+
+    def speaker(self, speaker_id: int) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM speakers WHERE id = ?", (speaker_id,)).fetchone()
+
+    def me(self) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM speakers WHERE is_me = 1 LIMIT 1").fetchone()
+
+    def update_speaker(self, speaker_id: int, **fields) -> None:
+        if not fields:
+            return
+        fields["updated_at"] = int(time.time())
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        self.db.execute(
+            f"UPDATE speakers SET {cols} WHERE id = ?", (*fields.values(), speaker_id)
+        )
+        self.db.commit()
+
+    def delete_speaker(self, speaker_id: int) -> None:
+        """Forget a person. Their label assignments revert to unassigned rather than
+        vanishing, so the diarization stays intact and can be re-attributed."""
+        with self.db:
+            self.db.execute(
+                "UPDATE recording_speakers SET speaker_id = NULL, source = 'unassigned', "
+                "confidence = NULL WHERE speaker_id = ?",
+                (speaker_id,),
+            )
+            self.db.execute("DELETE FROM speakers WHERE id = ?", (speaker_id,))
+
+    def set_recording_speakers(self, rec_id: str, labels: list[dict]) -> None:
+        """Write this recording's diarization labels, preserving human decisions.
+
+        Re-running diarization must never silently un-name somebody you named. The
+        upsert leaves `speaker_id`/`source` alone when the existing row was decided
+        by a human; machine attributions are free to be replaced.
+        """
+        now = int(time.time())
+        with self.db:
+            for lb in labels:
+                self.db.execute(
+                    """
+                    INSERT INTO recording_speakers
+                        (recording_id, label, seconds, turns, embedding, embedding_dim,
+                         source, decided_at)
+                    VALUES (?,?,?,?,?,?, 'unassigned', ?)
+                    ON CONFLICT(recording_id, label) DO UPDATE SET
+                        seconds = excluded.seconds,
+                        turns = excluded.turns,
+                        embedding = excluded.embedding,
+                        embedding_dim = excluded.embedding_dim
+                    """,
+                    (rec_id, lb["label"], lb.get("seconds", 0.0), lb.get("turns", 0),
+                     lb.get("embedding"), lb.get("embedding_dim"), now),
+                )
+
+    def attribute(self, rec_id: str, label: str, speaker_id: int | None, *,
+                  source: str, confidence: float | None = None) -> None:
+        if source not in ("unassigned", "voiceprint", "human"):
+            raise ValueError(f"unknown attribution source {source!r}")
+        self.db.execute(
+            "UPDATE recording_speakers SET speaker_id = ?, source = ?, confidence = ?, "
+            "decided_at = ? WHERE recording_id = ? AND label = ?",
+            (speaker_id, source, confidence, int(time.time()), rec_id, label),
+        )
+        self.db.commit()
+
+    def recording_speakers(self, rec_id: str) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT rs.*, s.name, s.is_me, s.external_ref FROM recording_speakers rs "
+            "LEFT JOIN speakers s ON s.id = rs.speaker_id "
+            "WHERE rs.recording_id = ? ORDER BY rs.seconds DESC",
+            (rec_id,),
+        ).fetchall()
+
+    def confirmed_embeddings(self, speaker_id: int) -> list[sqlite3.Row]:
+        """Every per-recording embedding a human confirmed as this person.
+
+        Only `human` rows count. Building a voiceprint out of the machine's own
+        guesses would let one bad match compound into a drifting identity.
+        """
+        return self.db.execute(
+            "SELECT embedding, embedding_dim, seconds FROM recording_speakers "
+            "WHERE speaker_id = ? AND source = 'human' AND embedding IS NOT NULL",
+            (speaker_id,),
+        ).fetchall()
+
+    def needing_diarization(self) -> list[sqlite3.Row]:
+        return self.db.execute(
+            f"SELECT r.* FROM recordings r WHERE r.diarized_at IS NULL "
+            f"AND r.transcript_path IS NOT NULL AND r.audio_path IS NOT NULL "
+            f"AND {self.NOT_EXCLUDED} ORDER BY r.started_at DESC"
+        ).fetchall()
+
+    def unnamed_labels(self) -> list[sqlite3.Row]:
+        """Diarized voices nobody has put a name to — the speaker inbox."""
+        return self.db.execute(
+            "SELECT rs.*, r.filename, r.title, r.started_at FROM recording_speakers rs "
+            "JOIN recordings r ON r.id = rs.recording_id "
+            "WHERE rs.speaker_id IS NULL ORDER BY rs.seconds DESC"
+        ).fetchall()
+
+    # ------------------------------------------------------------------ dispatch
+
+    def add_dispatch(self, action_id: int, agent: str, *, instructions: str = "") -> int:
+        cur = self.db.execute(
+            "INSERT INTO dispatch (action_id, agent, instructions, created_at) VALUES (?,?,?,?)",
+            (action_id, agent.strip().lower(), instructions.strip()[:2000], int(time.time())),
+        )
+        self.db.commit()
+        return cur.lastrowid
+
+    def dispatches(self, *, agent: str | None = None, status: str | None = None,
+                   action_id: int | None = None) -> list[sqlite3.Row]:
+        q = ("SELECT d.*, a.text AS action_text, a.owner, a.intent, a.due_at, a.quote, "
+             "a.recording_id FROM dispatch d JOIN actions a ON a.id = d.action_id WHERE 1=1")
+        args: list = []
+        if agent:
+            q += " AND d.agent = ?"
+            args.append(agent.strip().lower())
+        if status:
+            q += " AND d.status = ?"
+            args.append(status)
+        if action_id:
+            q += " AND d.action_id = ?"
+            args.append(action_id)
+        return self.db.execute(q + " ORDER BY d.created_at DESC", args).fetchall()
+
+    def get_dispatch(self, dispatch_id: int) -> sqlite3.Row | None:
+        return self.db.execute(
+            "SELECT d.*, a.text AS action_text, a.owner, a.intent, a.due_at, a.quote, "
+            "a.recording_id FROM dispatch d JOIN actions a ON a.id = d.action_id WHERE d.id = ?",
+            (dispatch_id,),
+        ).fetchone()
+
+    def claim_dispatch(self, dispatch_id: int, claimed_by: str) -> bool:
+        """Take a queued job. Returns False if somebody already has it.
+
+        The status guard is in the UPDATE, not a read-then-write, so two agents
+        polling the same queue cannot both believe they won.
+        """
+        cur = self.db.execute(
+            "UPDATE dispatch SET status = 'claimed', claimed_by = ?, claimed_at = ? "
+            "WHERE id = ? AND status = 'queued'",
+            (claimed_by[:200], int(time.time()), dispatch_id),
+        )
+        self.db.commit()
+        return cur.rowcount == 1
+
+    def finish_dispatch(self, dispatch_id: int, *, ok: bool, result: str = "",
+                        error: str = "") -> bool:
+        cur = self.db.execute(
+            "UPDATE dispatch SET status = ?, result = ?, error = ?, finished_at = ? "
+            "WHERE id = ? AND status = 'claimed'",
+            ("done" if ok else "failed", result[:8000], error[:2000],
+             int(time.time()), dispatch_id),
+        )
+        self.db.commit()
+        return cur.rowcount == 1
+
+    def update_dispatch(self, dispatch_id: int, **fields) -> None:
+        if not fields:
+            return
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        self.db.execute(
+            f"UPDATE dispatch SET {cols} WHERE id = ?", (*fields.values(), dispatch_id)
+        )
+        self.db.commit()
 
     def update(self, rec_id: str, **fields) -> None:
         if not fields:

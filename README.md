@@ -82,7 +82,7 @@ Every key can be overridden with `PLAUDVAULT_<KEY>` in the environment.
 ## Daily use
 
 ```bash
-plaudctl run       # sync → transcribe → summarize → score tone → notes → extract
+plaudctl run       # sync → transcribe → diarize → summarize → title → tone → notes → extract
 plaudctl fresh     # is the vault up to date? (--cloud also asks Plaud)
 plaudctl status    # what's archived, what's pending, what's healthy
 plaudctl verify    # re-hash the archive, catch bitrot or missing files
@@ -112,9 +112,12 @@ workflow.
 - **Inbox** — transcribed but untriaged recordings.
 - **Library** — everything, filterable by tier.
 - **Recording** — player, summary, transcript with click-to-seek timestamps, its tone
-  reading, and its actions. Where you set the tier and mark for cloud deletion.
+  reading, who spoke, and its actions. Where you set the tier, rename it, name a voice,
+  and mark for cloud deletion.
 - **Actions** — accept a proposal (stating what it should achieve), work it, complete
-  it with an outcome score.
+  it with an outcome score. Accepted actions can be handed to an agent.
+- **Agents** — what you assigned to an agent, and what it reported back.
+- **Speakers** — the people the archive can recognise by voice.
 - **Trends** — tone over time, one dot per recording. Click a dot to open it.
 - **Systems** — recurring commitments promoted to named practices with adherence rates.
 - **Measures** — follow-through, outcomes, systems, capture-pipeline health.
@@ -139,6 +142,12 @@ Every recording gets one of three tiers:
 Re-tier something out of *stack* and the copy is deleted on the next sync. The
 decision is enforced by what exists on disk, not by a flag downstream tools have to
 remember to respect.
+
+That guarantee covers what plaudvault owns. It does **not** survive a tool that copies
+`stack/` into its own index: deleting the file here cannot reach a row and an embedding
+that already live somewhere else. A downstream index must either re-scan `stack/` and
+prune what has vanished, or — better — not hold a copy at all and query this archive
+instead. See the Cognitive Stack boundary in `docs/PRODUCT-BIBLE.md` §9.
 
 ### Bulk edits
 
@@ -224,6 +233,135 @@ silent.
 Accepting asks for an **intent**: what this is supposed to achieve. Outcome scoring
 later is judged against exactly that, because finishing a task and the task having
 worked are different things and only one is worth measuring.
+
+## Titles
+
+Plaud names a file after the clock — `2026-07-14 09:12`. Accurate, and useless: thirty
+rows of timestamps tell you nothing about which one was the call with the lawyer. After a
+recording is summarized, the model reads that summary and proposes a name.
+
+```bash
+plaudctl title              # name anything unnamed
+plaudctl title --force      # re-title the model's own work, never yours
+```
+
+It is a proposal like everything else here. Press **rename** in the console to write your
+own, and a title you wrote is never overwritten by a re-run — clear the box instead to
+hand it back to the model. The device's filename is always shown alongside, so a title
+you disagree with never hides what the file actually is.
+
+When the model cannot find a subject it says so and the recording stays unnamed, rather
+than being filed as "Business Discussion". On the live corpus that was 49 of 50 named and
+1 correctly declined — thirty rows of "General Conversation" would be no better than
+thirty timestamps.
+
+## Who is speaking
+
+Transcription alone produces one undifferentiated monologue, which costs more than
+readability: an extracted commitment has an `owner` the model can only guess at, and a
+tone score cannot tell your frustration from someone else's.
+
+```bash
+plaudctl speakers status                      # what's set up, what isn't
+plaudctl speakers login                       # store a HuggingFace token
+plaudctl diarize                              # split recordings by voice
+plaudctl speakers unknown                     # voices nobody has named
+plaudctl speakers name <rec> SPEAKER_00 --name Bayo --me
+plaudctl speakers rematch                     # find that voice everywhere else
+plaudctl speakers link --speaker 1 --ref clarify:rec_123
+```
+
+Diarization gives you anonymous labels — `SPEAKER_00`, `SPEAKER_01`. Those are
+per-recording and useless across an archive, because `SPEAKER_00` is a different person in
+every file. The value is in the identity you lay over them: **name a voice once and its
+voiceprint is kept, so the next recording matches by voice rather than asking again.**
+Every recording here is yours, so the cheapest first move is to confirm yourself once.
+
+Two rules keep that honest:
+
+- **Only your confirmations build a voiceprint.** An automatic match is drawn as a guess
+  and never feeds back into the mean. Otherwise one bad match compounds until the identity
+  is whoever the machine has been mistaking for you, with nothing in the data saying when
+  it went wrong.
+- **Re-running diarization never un-names anybody.** Your decision lives in its own
+  column, exactly as triage survives a re-sync. Correcting an attribution rebuilds that
+  person's voiceprint without it, and renaming somebody rewrites every transcript they
+  appear in.
+
+Each person carries an optional **contact reference** — an opaque id pointing at whatever
+system holds the rest of that relationship. plaudvault never has to know whose CRM it is;
+it carries the string, and an agent asking `list_speakers` can join a voice to a record.
+
+Diarization is an extra, because pyannote pulls ~2 GB of torch and its models are gated:
+
+```bash
+pip install 'plaudvault[speakers]'
+```
+
+Then accept the licence, while signed in, at
+[pyannote/speaker-diarization-community-1](https://hf.co/pyannote/speaker-diarization-community-1)
+and [pyannote/segmentation-3.0](https://hf.co/pyannote/segmentation-3.0), and run
+`plaudctl speakers login`. Everything else in plaudvault works without any of this, and
+freshness will not nag you about undiarized recordings on a machine that cannot diarize.
+
+## Asking the archive from an agent
+
+```bash
+pip install 'plaudvault[mcp]'
+plaudctl mcp                    # stdio, for an MCP client to launch
+plaudctl mcp --tiers stack      # hand this client a narrower view
+```
+
+Registers like any stdio MCP server. For Claude Code:
+
+```bash
+claude mcp add --scope user plaudvault -- /path/to/.venv/bin/python -m plaudvault.cli mcp
+```
+
+Ten tools, in two halves. **Read:** `search_recordings`, `get_recording`,
+`get_transcript`, `list_recordings`, `list_speakers`, `list_actions`. **Act:**
+`my_tasks`, `claim_task`, `report_task`, `propose_action`.
+
+Search returns **cited passages** — recording, timestamp, tier, and the words themselves.
+The client's model does the synthesis; this server does the retrieval and never
+paraphrases, because a paraphrase with no timestamp is exactly the thing you cannot check.
+
+Tier is enforced here and nowhere else. `mcp_tier_scope` decides what a client may read
+and defaults to what the console shows; `exclude` is unreachable through every path
+regardless, and audio is never served. `--tiers stack` narrows one client without changing
+the others.
+
+**It is stdio, on this machine.** An agent running on a remote VM cannot reach it, and the
+console is loopback-only for the same reason. That is a networking-and-identity problem,
+not a missing feature — put a real identity proxy in front of it before you reach for a
+tunnel.
+
+## Handing work to an agent
+
+```bash
+plaudctl dispatch agents                                   # who is configured
+plaudctl dispatch assign 42 --agent openclaw --instructions "propose three slots next week"
+plaudctl dispatch list --status done
+plaudctl dispatch cancel 3
+```
+
+An accepted action can be assigned to an agent. **plaudvault never runs the work.** It
+writes the request and waits. The agent calls `my_tasks`, claims a job so no two agents do
+the same thing, does the work in its own world, and reports back to the **Agents** tab.
+
+Three constraints, none with an override:
+
+1. **Only an accepted action can be handed over.** `proposed` is the extractor's guess,
+   and the extractor is measured to over-propose. Acceptance is the step where a human
+   read the quote.
+2. **Dispatch is a request, never an execution.** Whatever the agent can do, it could
+   already do; this only tells it what you want.
+3. **A finished job is a report, not a completion.** The result lands on the dispatch row
+   and the action stays open. An agent that believes it booked a meeting and did not must
+   not be able to tick the box itself.
+
+The quote from the recording travels with the job, because an agent told to "set up the
+meeting" with no source cannot tell a real commitment from a garbled one.
 
 ## Semantic search
 
@@ -472,6 +610,19 @@ run is writing. A lock whose process is gone is treated as stale and taken over,
 killed run can't wedge the pipeline.
 
 ## Known gaps
+
+- **A voiceprint match is similarity, not recognition.** Two similar voices, a bad line,
+  or a day when somebody is ill will all move it. Unconfirmed names are shown as guesses;
+  treat one as a prompt to check.
+- **Diarization does not know who anybody is.** It knows how many voices there are and
+  when each spoke. The identity layer starts empty and is worth exactly what you put into it.
+- **A title is a summary of a summary**, so it inherits every weakness of the summary and
+  compresses it further. It is a way to find a recording, not a description of one.
+- **An agent's report is unverified.** plaudvault records what the agent said it did and
+  has no way to check — which is why the action stays open until you close it.
+- **Extraction does not re-run when speakers are named.** Named transcripts should improve
+  the `owner` on commitments, but nothing currently re-extracts, so that gain is not
+  realised on recordings extracted before they were diarized.
 
 - **No speaker diarization.** Plaud labels speakers; local Whisper doesn't. Adding
   `pyannote.audio` would close this at the cost of a gated-model login.

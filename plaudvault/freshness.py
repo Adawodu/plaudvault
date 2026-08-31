@@ -19,7 +19,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from . import tiering
+from . import diarize, tiering
 from .config import Config
 from .store import Store
 
@@ -49,6 +49,19 @@ def _pending(store: Store, cfg: Config) -> list[dict]:
             "fix": "plaudctl transcribe",
         },
         {
+            # Only counted when diarization is actually configured. The models are
+            # gated behind a HuggingFace licence, so on a machine that has not set
+            # that up this would be permanently outstanding work nobody can do — the
+            # amber-forever indicator D11 and D15 both exist to prevent.
+            "stage": "diarize",
+            "count": q(
+                "diarized_at IS NULL AND transcript_path IS NOT NULL "
+                f"AND duration_s >= {int(cfg.diarize_min_seconds)}"
+            ) if diarize.status(cfg)[0] else 0,
+            "label": "split by speaker",
+            "fix": "plaudctl diarize",
+        },
+        {
             "stage": "summarize",
             "count": q(
                 "summary_path IS NULL AND transcript_path IS NOT NULL "
@@ -56,6 +69,15 @@ def _pending(store: Store, cfg: Config) -> list[dict]:
             ),
             "label": "summarized",
             "fix": "plaudctl summarize",
+        },
+        {
+            "stage": "title",
+            # Keyed on `titled_at`, like sentiment: a recording the titler looked at
+            # and could not name is settled, not outstanding. Counting it would leave
+            # the pill amber forever over work that can never complete.
+            "count": q("titled_at IS NULL AND transcript_path IS NOT NULL"),
+            "label": "given a title",
+            "fix": "plaudctl title",
         },
         {
             "stage": "sentiment",
@@ -156,6 +178,9 @@ def local(cfg: Config, store: Store) -> dict:
     stack = _stack_drift(cfg, store)
     untriaged = store.untriaged()
     proposed = store.actions(status="proposed")
+    unnamed = store.unnamed_labels()
+    finished = store.dispatches(status="done") + store.dispatches(status="failed")
+    unreviewed = [d for d in finished if not d["reviewed_at"]]
 
     oldest_untriaged = (
         round((time.time() - min(r["started_at"] for r in untriaged)) / DAY, 1)
@@ -172,6 +197,15 @@ def local(cfg: Config, store: Store) -> dict:
         "untriaged": len(untriaged),
         "oldest_untriaged_days": oldest_untriaged,
         "proposed_actions": len(proposed),
+        # A voice with no name is a decision only you can make, and an agent's report
+        # is something only you can accept — both belong here rather than in the
+        # verdict, for the same reason triage does.
+        "unnamed_voices": len(unnamed),
+        "unnamed_recordings": len({r["recording_id"] for r in unnamed}),
+        "unreviewed_dispatches": len(unreviewed),
+        "open_dispatches": len(
+            store.dispatches(status="queued") + store.dispatches(status="claimed")
+        ),
     }
 
 

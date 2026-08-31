@@ -7,9 +7,9 @@ import sys
 import time
 from pathlib import Path
 
-from . import (auth, extract, freshness, notes, prune, runlock, search,
-               sentiment, service, setup_wizard, story, summarize, sync,
-               tiering, transcribe)
+from . import (auth, diarize, dispatch, extract, freshness, notes, prune,
+               runlock, search, sentiment, service, setup_wizard, story,
+               summarize, sync, tiering, titles, transcribe)
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -95,6 +95,213 @@ def cmd_extract(args, cfg) -> int:
     print(f"\n  scanned {s['recordings']}, proposed {s['proposed']} actions, failed {s['failed']}")
     print("  review them in the console: plaudctl web")
     return 1 if s["failed"] else 0
+
+
+def cmd_title(args, cfg) -> int:
+    with Store(cfg.db_path) as store:
+        s = titles.run(cfg, store, limit=args.limit, force=args.force)
+    print(f"\n  titled {s['titled']}, left unnamed {s['unnamed']}, failed {s['failed']}")
+    return 1 if s["failed"] else 0
+
+
+def cmd_diarize(args, cfg) -> int:
+    with Store(cfg.db_path) as store:
+        s = diarize.run(cfg, store, limit=args.limit, force=args.force,
+                        num_speakers=args.speakers)
+    print(f"\n  diarized {s['done']}, failed {s['failed']} — "
+          f"{s['labels']} voices, {s['matched']} recognised from voiceprints")
+    if s["done"]:
+        print("  name the unknown ones: plaudctl speakers unknown")
+    return 1 if s["failed"] else 0
+
+
+def cmd_speakers(args, cfg) -> int:
+    """The identity side of diarization: who these voices belong to."""
+    action = args.action
+
+    if action == "login":
+        import getpass
+
+        token = getpass.getpass("  HuggingFace token (hf_...): ").strip()
+        if not token:
+            print("  nothing entered")
+            return 1
+        auth.keychain_set(cfg.keychain_service, "huggingface", token)
+        print(f"  stored in the OS keyring (service={cfg.keychain_service})")
+        print("  the diarization models are gated — accept the licence at:")
+        for m in diarize.GATED_MODELS:
+            print(f"    https://hf.co/{m}")
+        return 0
+
+    if action == "status":
+        ok, why = diarize.status(cfg)
+        print(f"  diarization: {'ok ' if ok else 'XX '}{why}")
+        if not ok:
+            print("  the models are free but gated — accept the licence at:")
+            for m in diarize.GATED_MODELS:
+                print(f"    https://hf.co/{m}")
+            print(f"  then: plaudctl speakers login   (or export {cfg.hf_token_env}=...)")
+        with Store(cfg.db_path) as store:
+            n_diar = store.db.execute(
+                "SELECT COUNT(*) FROM recordings WHERE diarized_at IS NOT NULL"
+            ).fetchone()[0]
+            print(f"  {n_diar} recordings diarized, {len(store.unnamed_labels())} voices unnamed")
+            print(f"  match threshold: {cfg.speaker_match_threshold} cosine")
+        return 0
+
+    with Store(cfg.db_path) as store:
+        if action == "list":
+            rows = store.speakers()
+            if not rows:
+                print("  nobody named yet — run: plaudctl speakers unknown")
+                return 0
+            for sp in rows:
+                me = " (you)" if sp["is_me"] else ""
+                vp = f"voiceprint from {sp['voiceprint_n']}" if sp["voiceprint"] else "no voiceprint"
+                ref = f" · {sp['external_ref']}" if sp["external_ref"] else ""
+                print(f"  [{sp['id']:>3}] {sp['name']}{me}  —  {sp['recordings']} recordings, {vp}{ref}")
+            return 0
+
+        if action == "add":
+            if not args.name:
+                print("error: --name is required", file=sys.stderr)
+                return 2
+            sid = store.add_speaker(args.name, is_me=args.me,
+                                    external_ref=args.ref or "", note=args.note or "")
+            print(f"  speaker {sid}: {args.name}{' (you)' if args.me else ''}")
+            print("  attribute a voice to them: plaudctl speakers name <recording> <label> "
+                  f"--speaker {sid}")
+            return 0
+
+        if action == "unknown":
+            rows = store.unnamed_labels()
+            if not rows:
+                print("  every diarized voice has a name")
+                return 0
+            print(f"  {len(rows)} unnamed voices, longest-speaking first:\n")
+            for r in rows[: args.limit or 25]:
+                when = time.strftime("%Y-%m-%d", time.localtime(r["started_at"]))
+                name = r["title"] or r["filename"]
+                mins = (r["seconds"] or 0) / 60
+                print(f"  {r['recording_id']}  {r['label']:<12} {mins:5.1f} min  "
+                      f"{when}  {name[:44]}")
+            print("\n  name one:  plaudctl speakers name <recording_id> <label> --name Bayo")
+            return 0
+
+        if action == "name":
+            if not (args.recording and args.label):
+                print("error: recording id and label are required", file=sys.stderr)
+                return 2
+            if args.speaker:
+                sid = args.speaker
+            elif args.name:
+                sid = store.add_speaker(args.name, is_me=args.me, external_ref=args.ref or "")
+            elif args.clear:
+                sid = None
+            else:
+                print("error: pass --name, --speaker or --clear", file=sys.stderr)
+                return 2
+            try:
+                out = diarize.confirm(cfg, store, args.recording, args.label, sid)
+            except KeyError:
+                print(f"error: {args.recording} has no label {args.label}", file=sys.stderr)
+                return 2
+            who = store.speaker(sid)["name"] if sid else "(unnamed)"
+            print(f"  {args.label} in {args.recording} is {who}")
+            for spk_id, n in out["voiceprints"].items():
+                sp = store.speaker(spk_id)
+                if sp:
+                    print(f"  voiceprint for {sp['name']}: {n} confirmed recording(s)")
+            print("  transcript re-rendered with the new name")
+            if sid:
+                print("  apply it to the rest of the archive: plaudctl speakers rematch")
+            return 0
+
+        if action == "rematch":
+            s = diarize.rematch(cfg, store, threshold=args.threshold)
+            print(f"  considered {s['considered']} unnamed voices, matched {s['matched']} "
+                  f"across {s['recordings']} recordings")
+            print("  every match is a machine guess — check them: plaudctl speakers list")
+            return 0
+
+        if action == "link":
+            if not (args.speaker and args.ref):
+                print("error: --speaker and --ref are required", file=sys.stderr)
+                return 2
+            store.update_speaker(args.speaker, external_ref=args.ref)
+            sp = store.speaker(args.speaker)
+            print(f"  {sp['name']} -> {args.ref}")
+            return 0
+
+    print(f"error: unknown speakers action {action!r}", file=sys.stderr)
+    return 2
+
+
+def cmd_dispatch(args, cfg) -> int:
+    """Hand accepted actions to an agent, and read back what it did."""
+    with Store(cfg.db_path) as store:
+        if args.action == "assign":
+            try:
+                d = dispatch.assign(cfg, store, args.id, args.agent,
+                                    instructions=args.instructions or "")
+            except KeyError:
+                print(f"error: no action {args.id}", file=sys.stderr)
+                return 2
+            except (ValueError, dispatch.NotDispatchable) as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            print(f"  dispatch {d['id']}: action {args.id} queued for {d['agent']}")
+            print(f"  the agent picks it up with the MCP tool my_tasks(\"{d['agent']}\")")
+            return 0
+
+        if args.action == "list":
+            rows = store.dispatches(agent=args.agent, status=args.status)
+            if not rows:
+                print("  nothing dispatched")
+                return 0
+            for r in rows:
+                seen = "" if r["reviewed_at"] or r["status"] in ("queued", "claimed") else "  *unreviewed*"
+                print(f"  [{r['id']:>3}] {r['status']:<10} {r['agent']:<10} {r['action_text'][:52]}{seen}")
+                if r["result"]:
+                    print(f"        -> {' '.join(r['result'].split())[:100]}")
+                if r["error"]:
+                    print(f"        !! {' '.join(r['error'].split())[:100]}")
+            return 0
+
+        if args.action == "cancel":
+            try:
+                dispatch.cancel(store, args.id)
+            except KeyError:
+                print(f"error: no dispatch {args.id}", file=sys.stderr)
+                return 2
+            except dispatch.NotDispatchable as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            print(f"  dispatch {args.id} cancelled")
+            return 0
+
+        if args.action == "agents":
+            s = dispatch.summary(cfg, store)
+            print(f"  configured: {', '.join(dispatch.agents(cfg)) or '(none)'}")
+            for agent, counts in s["agents"].items():
+                live = ", ".join(f"{k} {v}" for k, v in counts.items() if v)
+                print(f"    {agent:<12} {live}")
+            print(f"  {s['open']} open, {s['unreviewed']} finished and unreviewed")
+            return 0
+
+    print(f"error: unknown dispatch action {args.action!r}", file=sys.stderr)
+    return 2
+
+
+def cmd_mcp(args, cfg) -> int:
+    """Serve the archive to MCP clients over stdio."""
+    from .mcp_server import serve
+
+    tiers = None
+    if args.tiers:
+        tiers = {t.strip().lower() for t in args.tiers.split(",") if t.strip()}
+    serve(tiers)
+    return 0
 
 
 def cmd_index(args, cfg) -> int:
@@ -216,9 +423,20 @@ def _run_stages(args, cfg) -> int:
     rc = cmd_sync(args, cfg)
     print("\n== transcribe ==")
     rc |= cmd_transcribe(args, cfg)
+    print("\n== diarize ==")
+    try:
+        rc |= cmd_diarize(args, cfg)
+    except RuntimeError as exc:
+        print(f"  [skip] {exc}")
     print("\n== summarize ==")
     try:
         rc |= cmd_summarize(args, cfg)
+    except RuntimeError as exc:
+        print(f"  [skip] {exc}")
+    # After summarize: the summary is a far better title source than raw ASR.
+    print("\n== title ==")
+    try:
+        rc |= cmd_title(args, cfg)
     except RuntimeError as exc:
         print(f"  [skip] {exc}")
     # Before notes, so the frontmatter carries the reading rather than lagging a run.
@@ -311,7 +529,8 @@ def _print_freshness(report: dict) -> None:
         print(f"      cloud not checked — {r['detail']}")
     else:
         print("      cloud not checked")
-    if report["untriaged"] or report["proposed_actions"]:
+    if (report["untriaged"] or report["proposed_actions"]
+            or report.get("unnamed_voices") or report.get("unreviewed_dispatches")):
         print("\n  waiting on you (not on the pipeline):")
         if report["untriaged"]:
             oldest = report["oldest_untriaged_days"]
@@ -319,6 +538,13 @@ def _print_freshness(report: dict) -> None:
                   + (f", oldest {oldest} days" if oldest else ""))
         if report["proposed_actions"]:
             print(f"      {report['proposed_actions']:>4} proposed actions awaiting review")
+        if report.get("unnamed_voices"):
+            print(f"      {report['unnamed_voices']:>4} voices with no name"
+                  f" across {report['unnamed_recordings']} recordings"
+                  "   plaudctl speakers unknown")
+        if report.get("unreviewed_dispatches"):
+            print(f"      {report['unreviewed_dispatches']:>4} agent reports you have not read"
+                  "        plaudctl dispatch list")
 
 
 def cmd_fresh(args, cfg) -> int:
@@ -364,7 +590,11 @@ def main(argv=None) -> int:
         sp.set_defaults(fn=fn, limit=None, force=False, yes=False, probe=False, cloud=False,
                         suggestions=False, excluded=False, query='',
                         recording=None, format='svg', out=None,
-                        arc=False, themes=8, days=None)
+                        arc=False, themes=8, days=None,
+                        speakers=None, name=None, ref=None, note=None, me=False,
+                        label=None, speaker=None, clear=False, threshold=None,
+                        agent=None, status=None, instructions=None, id=None,
+                        tiers=None)
         return sp
 
     sp = add("login", cmd_login, "authenticate with Plaud (emailed one-time code)")
@@ -415,6 +645,43 @@ def main(argv=None) -> int:
     sp.add_argument("--themes", type=int, default=8, help="how many themes to cluster into")
     sp.add_argument("--days", type=int, help="limit the arc to the last N days")
 
+    sp = add("title", cmd_title, "name recordings from their content, not their timestamp")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--force", action="store_true",
+                    help="re-title machine-titled recordings (never your own)")
+
+    sp = add("diarize", cmd_diarize, "split recordings by speaker and recognise known voices")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--force", action="store_true", help="re-diarize already-processed audio")
+    sp.add_argument("--speakers", type=int,
+                    help="force an exact speaker count (use when you know it)")
+
+    sp = add("speakers", cmd_speakers, "name the voices in your recordings")
+    sp.add_argument("action", nargs="?", default="list",
+                    choices=["list", "status", "login", "add", "unknown", "name",
+                             "rematch", "link"])
+    sp.add_argument("recording", nargs="?", help="recording id (for `name`)")
+    sp.add_argument("label", nargs="?", help="diarization label, e.g. SPEAKER_00")
+    sp.add_argument("--name", help="the person's name")
+    sp.add_argument("--speaker", type=int, help="an existing speaker id")
+    sp.add_argument("--me", action="store_true", help="this speaker is you")
+    sp.add_argument("--ref", help="external contact/CRM reference, e.g. clarify:rec_123")
+    sp.add_argument("--note", help="free-text note about this person")
+    sp.add_argument("--clear", action="store_true", help="un-name a label")
+    sp.add_argument("--threshold", type=float, help="override the match threshold for `rematch`")
+    sp.add_argument("--limit", type=int)
+
+    sp = add("dispatch", cmd_dispatch, "assign accepted actions to an agent")
+    sp.add_argument("action", nargs="?", default="list",
+                    choices=["list", "assign", "cancel", "agents"])
+    sp.add_argument("id", nargs="?", type=int, help="action id to assign, or dispatch id to cancel")
+    sp.add_argument("--agent", help="which agent, e.g. openclaw")
+    sp.add_argument("--instructions", help="anything the agent needs beyond the action text")
+    sp.add_argument("--status", choices=list(dispatch.STATUSES))
+
+    sp = add("mcp", cmd_mcp, "serve the archive to MCP clients over stdio")
+    sp.add_argument("--tiers", help="override mcp_tier_scope, e.g. stack or stack,local")
+
     add("tier", cmd_tier, "reconcile PLAUD/stack/ with your triage decisions")
 
     sp = add("web", cmd_web, "open the console (triage, actions, measures)")
@@ -427,7 +694,8 @@ def main(argv=None) -> int:
                     choices=["install", "uninstall", "status"])
     sp.add_argument("--hours", help="comma-separated sync hours, e.g. 7,12,18,22")
 
-    sp = add("run", cmd_run, "sync -> transcribe -> summarize -> sentiment -> notes -> extract")
+    sp = add("run", cmd_run,
+             "sync -> transcribe -> diarize -> summarize -> title -> sentiment -> notes -> extract -> index -> tier")
     sp.add_argument("--limit", type=int)
 
     sp = add("prune", cmd_prune, "move locally-archived recordings to Plaud's trash")

@@ -18,6 +18,12 @@ dependencies = [
 [project.optional-dependencies]
 # Force the portable backend on a Mac, e.g. to reproduce what Linux users see.
 portable = ["faster-whisper>=1.0"]
+# Speaker diarization. Kept optional because it pulls torch and pyannote (~2 GB) and
+# needs a HuggingFace licence accepted for the gated models — a real cost to impose on
+# somebody who only wants transcripts. Everything else works without it.
+speakers = ["pyannote.audio>=3.1"]
+# Serve the archive to MCP clients: `plaudctl mcp`.
+mcp = ["mcp>=1.2"]
 
 [project.scripts]
 plaudctl = "plaudvault.cli:main"

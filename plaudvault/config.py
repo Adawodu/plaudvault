@@ -78,6 +78,35 @@ DEFAULTS: dict = {
     # disclosure than summarizing one file, and should not follow that setting.
     "embed_model": "nomic-embed-text",
 
+    # ---- speakers ---------------------------------------------------------
+    # Diarization splits audio into anonymous SPEAKER_00/01/... turns and returns one
+    # embedding per speaker. Naming a label once stores that embedding as a voiceprint,
+    # so the same voice is recognised in every later recording.
+    #
+    # The models are gated on HuggingFace: free, but you must accept the licence on
+    # each model page and hold a token. `plaudctl speakers status` says exactly which.
+    "diarize_model": "pyannote/speaker-diarization-community-1",
+    # Name of the env var holding the HF token. The token itself is stored in the OS
+    # keyring (`plaudctl speakers login`), never in this file.
+    "hf_token_env": "HF_TOKEN",
+    # Cosine similarity above which an unnamed voice is auto-attributed to a known
+    # person. pyannote's embeddings put the same speaker around 0.7-0.9 and different
+    # speakers around 0.2-0.45, so 0.65 leaves a real gap on both sides. An automatic
+    # match is always shown as a machine guess and never feeds another voiceprint.
+    "speaker_match_threshold": 0.65,
+    # Diarizing a 20-second memo produces one speaker and costs a model load.
+    "diarize_min_seconds": 60,
+
+    # ---- agent dispatch / MCP ---------------------------------------------
+    # Which tiers an MCP client may read. 'stack' is the strictest (see the product
+    # bible §9); the default matches what the local console shows, because the MCP
+    # server binds to stdio on this machine for your own agents.
+    # Comma-separated: any of stack, local, untriaged.
+    "mcp_tier_scope": "stack,local,untriaged",
+    # Agents an action may be assigned to. Free text, but an allow-list means a typo
+    # cannot park a job in a queue nobody polls.
+    "agents": "openclaw,claude",
+
     # ---- behaviour --------------------------------------------------------
     # Extract only what someone actually committed to. Turning this on also asks for
     # implied next steps, which a small local model produces in bulk: on a real ~20-hour
@@ -114,6 +143,12 @@ class Config:
     openai_model: str
     openai_api_key_env: str
     embed_model: str
+    diarize_model: str
+    hf_token_env: str
+    speaker_match_threshold: float
+    diarize_min_seconds: int
+    mcp_tier_scope: str
+    agents: str
     extract_suggestions: bool
     summarize_min_seconds: int
     prune_min_age_days: int
@@ -138,6 +173,10 @@ class Config:
     @property
     def summary_dir(self) -> Path:
         return self.archive_root / "summaries"
+
+    @property
+    def diarization_dir(self) -> Path:
+        return self.archive_root / "diarization"
 
     @property
     def db_path(self) -> Path:
@@ -177,6 +216,30 @@ class Config:
     def openai_api_key(self) -> str:
         return os.environ.get(self.openai_api_key_env, "")
 
+    def hf_token(self) -> str:
+        """The HuggingFace token, environment first, then the OS keyring.
+
+        Environment wins so a CI or one-off run can override without touching the
+        keyring, which is where `plaudctl speakers login` puts it.
+        """
+        env = os.environ.get(self.hf_token_env, "")
+        if env:
+            return env
+        try:
+            from .auth import keychain_get
+
+            return keychain_get(self.keychain_service, "huggingface") or ""
+        except Exception:  # noqa: BLE001 — no keyring backend is a valid state
+            return ""
+
+    @property
+    def agent_names(self) -> list[str]:
+        return [a.strip().lower() for a in self.agents.split(",") if a.strip()]
+
+    @property
+    def mcp_tiers(self) -> set[str]:
+        return {t.strip().lower() for t in self.mcp_tier_scope.split(",") if t.strip()}
+
     # ---- safety -----------------------------------------------------------
 
     def check_archive_available(self) -> None:
@@ -202,7 +265,8 @@ class Config:
 
     def ensure_dirs(self) -> None:
         self.check_archive_available()
-        dirs = [self.audio_dir, self.meta_dir, self.transcript_dir, self.summary_dir]
+        dirs = [self.audio_dir, self.meta_dir, self.transcript_dir, self.summary_dir,
+                self.diarization_dir]
         if self.notes_dir:
             dirs.append(self.notes_dir)
         for d in dirs:
@@ -223,6 +287,8 @@ def load() -> Config:
             data[key] = env.lower() in ("1", "true", "yes")
         elif isinstance(default, int) and not isinstance(default, bool):
             data[key] = int(env)
+        elif isinstance(default, float):
+            data[key] = float(env)
         else:
             data[key] = env
 
@@ -235,7 +301,7 @@ def load() -> Config:
 def _fmt(v) -> str:
     if isinstance(v, bool):
         return str(v).lower()
-    if isinstance(v, int):
+    if isinstance(v, (int, float)):
         return str(v)
     return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
 

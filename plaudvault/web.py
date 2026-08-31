@@ -18,7 +18,8 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, freshness, llm, metrics, runlock, search, story, tiering, transcribe
+from . import (auth, diarize, dispatch, freshness, llm, metrics, runlock, search,
+               story, tiering, titles, transcribe)
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -62,6 +63,17 @@ def _rec_dto(cfg, store, r) -> dict:
     acts = store.actions(recording_id=r["id"])
     return {
         **_row(r),
+        # One rule for what a recording is called, everywhere: the title if it has
+        # one, the device's filename if not. The filename is always carried too, so
+        # a title you disagree with never hides what the file actually is.
+        "display": titles.display(r),
+        "speakers": [
+            {"label": sp["label"], "name": sp["name"], "source": sp["source"],
+             "confidence": sp["confidence"], "is_me": bool(sp["is_me"]),
+             "minutes": round((sp["seconds"] or 0) / 60, 1),
+             "speaker_id": sp["speaker_id"], "external_ref": sp["external_ref"]}
+            for sp in store.recording_speakers(r["id"])
+        ],
         "sentiment": _sentiment_dto(store.sentiment_of(r["id"])),
         "started_iso": time.strftime("%Y-%m-%d %H:%M", time.localtime(r["started_at"])),
         "duration_min": round((r["duration_s"] or 0) / 60, 1),
@@ -95,7 +107,11 @@ def recordings(tier: str | None = None, untriaged: bool = False, q: str = "",
         )
         if q:
             needle = q.lower()
-            rows = [r for r in rows if needle in (r["filename"] or "").lower()]
+            rows = [
+                r for r in rows
+                if needle in (r["filename"] or "").lower()
+                or needle in (r["title"] or "").lower()
+            ]
         return [_rec_dto(cfg, store, r) for r in rows]
 
 
@@ -211,6 +227,221 @@ def recordings_bulk(body: dict = Body(...)):
             "stack_sync": report}
 
 
+@app.patch("/api/recordings/{rec_id}/title")
+def set_title(rec_id: str, body: dict = Body(...)):
+    """Rename a recording by hand. A human title is never overwritten by a re-run."""
+    cfg = _cfg()
+    title = str(body.get("title") or "").strip()
+    with _store(cfg) as store:
+        if store.get(rec_id) is None:
+            raise HTTPException(404, "no such recording")
+        if not title:
+            # Clearing a title puts the recording back in the queue for the machine
+            # to name — the way to say "your title was wrong, try again".
+            store.db.execute(
+                "UPDATE recordings SET title = NULL, title_source = NULL, "
+                "titled_at = NULL WHERE id = ?", (rec_id,)
+            )
+            store.db.commit()
+            return {"ok": True, "title": None, "source": None}
+        store.set_title(rec_id, title, source="human")
+        # The transcript header carries the title, so it follows the rename.
+        diarize.render_transcript(cfg, store, rec_id)
+        return {"ok": True, "title": title[:200], "source": "human"}
+
+
+# ----------------------------------------------------------------------- speakers
+
+
+@app.get("/api/speakers")
+def speakers():
+    cfg = _cfg()
+    ok, why = diarize.status(cfg)
+    with _store(cfg) as store:
+        return {
+            "ready": ok,
+            "detail": why,
+            "gated_models": list(diarize.GATED_MODELS),
+            "threshold": cfg.speaker_match_threshold,
+            "speakers": [
+                {**_row(sp), "voiceprint": None, "has_voiceprint": bool(sp["voiceprint"])}
+                for sp in store.speakers()
+            ],
+            "unknown": [
+                {"recording_id": r["recording_id"], "label": r["label"],
+                 "minutes": round((r["seconds"] or 0) / 60, 1), "turns": r["turns"],
+                 "recording": r["title"] or r["filename"],
+                 "recorded_iso": time.strftime("%Y-%m-%d", time.localtime(r["started_at"]))}
+                for r in store.unnamed_labels()
+            ],
+        }
+
+
+@app.post("/api/speakers")
+def create_speaker(body: dict = Body(...)):
+    cfg = _cfg()
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    with _store(cfg) as store:
+        sid = store.add_speaker(
+            name,
+            is_me=bool(body.get("is_me")),
+            external_ref=str(body.get("external_ref") or "")[:200],
+            note=str(body.get("note") or "")[:1000],
+        )
+        return {"id": sid, "name": name}
+
+
+@app.patch("/api/speakers/{speaker_id}")
+def update_speaker(speaker_id: int, body: dict = Body(...)):
+    """Rename a person, mark them as you, or attach a CRM reference."""
+    cfg = _cfg()
+    allowed = {"name", "external_ref", "note", "is_me"}
+    fields = {k: v for k, v in body.items() if k in allowed}
+    if "is_me" in fields:
+        fields["is_me"] = int(bool(fields["is_me"]))
+    if "name" in fields:
+        fields["name"] = str(fields["name"]).strip()[:200]
+        if not fields["name"]:
+            raise HTTPException(400, "name cannot be empty")
+    with _store(cfg) as store:
+        if store.speaker(speaker_id) is None:
+            raise HTTPException(404, "no such speaker")
+        # Only one person is the archive's owner. Setting a second would make
+        # `is_me` meaningless and every "did I say that" question ambiguous.
+        if fields.get("is_me"):
+            store.db.execute("UPDATE speakers SET is_me = 0 WHERE id != ?", (speaker_id,))
+        store.update_speaker(speaker_id, **fields)
+        # A rename changes every transcript this person appears in.
+        if "name" in fields:
+            for rs in store.db.execute(
+                "SELECT DISTINCT recording_id FROM recording_speakers WHERE speaker_id = ?",
+                (speaker_id,),
+            ).fetchall():
+                diarize.render_transcript(cfg, store, rs["recording_id"])
+        return {"ok": True, "speaker": {**_row(store.speaker(speaker_id)), "voiceprint": None}}
+
+
+@app.delete("/api/speakers/{speaker_id}")
+def delete_speaker(speaker_id: int):
+    cfg = _cfg()
+    with _store(cfg) as store:
+        if store.speaker(speaker_id) is None:
+            raise HTTPException(404, "no such speaker")
+        recs = [
+            r["recording_id"] for r in store.db.execute(
+                "SELECT DISTINCT recording_id FROM recording_speakers WHERE speaker_id = ?",
+                (speaker_id,),
+            ).fetchall()
+        ]
+        store.delete_speaker(speaker_id)
+        for rec_id in recs:
+            diarize.render_transcript(cfg, store, rec_id)
+        return {"ok": True, "unnamed_labels": len(recs)}
+
+
+@app.post("/api/recordings/{rec_id}/speakers/{label}")
+def name_label(rec_id: str, label: str, body: dict = Body(...)):
+    """Say who a voice is. The single write that teaches the archive a person.
+
+    Takes either an existing `speaker_id`, a `name` to create-or-reuse, or neither
+    (which un-names the label). Rebuilds that person's voiceprint and re-renders the
+    transcript, so the correction lands everywhere at once.
+    """
+    cfg = _cfg()
+    with _store(cfg) as store:
+        sid = body.get("speaker_id")
+        name = str(body.get("name") or "").strip()
+        if sid is not None:
+            sid = int(sid)
+            if store.speaker(sid) is None:
+                raise HTTPException(404, "no such speaker")
+        elif name:
+            sid = store.add_speaker(
+                name, is_me=bool(body.get("is_me")),
+                external_ref=str(body.get("external_ref") or "")[:200],
+            )
+        else:
+            sid = None
+        try:
+            out = diarize.confirm(cfg, store, rec_id, label, sid)
+        except KeyError:
+            raise HTTPException(404, f"{rec_id} has no label {label}") from None
+        return {"ok": True, **out,
+                "speaker": {**_row(store.speaker(sid)), "voiceprint": None} if sid else None}
+
+
+@app.post("/api/speakers/rematch")
+def rematch_speakers(body: dict = Body(default={})):
+    """Re-run voiceprint matching over every unnamed voice in the archive.
+
+    What you press after naming somebody for the first time: the voiceprint that did
+    not exist when those recordings were diarized exists now.
+    """
+    cfg = _cfg()
+    threshold = body.get("threshold")
+    with _store(cfg) as store:
+        return diarize.rematch(
+            cfg, store, threshold=float(threshold) if threshold is not None else None
+        )
+
+
+# ----------------------------------------------------------------------- dispatch
+
+
+@app.get("/api/dispatch")
+def list_dispatch(agent: str | None = None, status: str | None = None):
+    cfg = _cfg()
+    with _store(cfg) as store:
+        rows = store.dispatches(agent=agent, status=status)
+        return {
+            "agents": dispatch.agents(cfg),
+            "summary": dispatch.summary(cfg, store),
+            "dispatches": [
+                {**dispatch.brief(store, r), "reviewed_at": r["reviewed_at"]}
+                for r in rows
+            ],
+        }
+
+
+@app.post("/api/dispatch")
+def create_dispatch(body: dict = Body(...)):
+    """Assign an accepted action to an agent. plaudvault never runs the work itself."""
+    cfg = _cfg()
+    try:
+        action_id = int(body.get("action_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "action_id is required") from None
+    with _store(cfg) as store:
+        try:
+            d = dispatch.assign(cfg, store, action_id, str(body.get("agent") or ""),
+                                instructions=str(body.get("instructions") or ""))
+        except KeyError:
+            raise HTTPException(404, "no such action") from None
+        except dispatch.NotDispatchable as exc:
+            raise HTTPException(409, str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"ok": True, "dispatch": dispatch.brief(store, store.get_dispatch(d["id"]))}
+
+
+@app.post("/api/dispatch/{dispatch_id}/{verb}")
+def dispatch_verb(dispatch_id: int, verb: str, body: dict = Body(default={})):
+    """`cancel` withdraws a job; `review` marks that you have read the agent's report."""
+    cfg = _cfg()
+    if verb not in ("cancel", "review"):
+        raise HTTPException(400, "verb must be cancel or review")
+    with _store(cfg) as store:
+        try:
+            fn = dispatch.cancel if verb == "cancel" else dispatch.review
+            return {"ok": True, "dispatch": fn(store, dispatch_id)}
+        except KeyError:
+            raise HTTPException(404, "no such dispatch") from None
+        except dispatch.NotDispatchable as exc:
+            raise HTTPException(409, str(exc)) from None
+
+
 # ----------------------------------------------------------------------- actions
 
 
@@ -226,7 +457,13 @@ def actions(status: str | None = None):
                 {
                     **_row(a),
                     "system_name": systems.get(a["system_id"]),
-                    "recording_name": rec["filename"] if rec else None,
+                    "recording_name": titles.display(rec) if rec else None,
+                    "dispatches": [
+                        {"id": d["id"], "agent": d["agent"], "status": d["status"],
+                         "result": d["result"], "error": d["error"],
+                         "reviewed_at": d["reviewed_at"]}
+                        for d in store.dispatches(action_id=a["id"])
+                    ],
                     "recording_date": time.strftime("%Y-%m-%d", time.localtime(rec["started_at"]))
                     if rec
                     else None,
@@ -556,6 +793,15 @@ def settings():
             "detail": llm_why,
             "local": llm.is_local(cfg),
         },
+        "diarize": {
+            "model": cfg.diarize_model,
+            "ok": diarize.status(cfg)[0],
+            "detail": diarize.status(cfg)[1],
+            "threshold": cfg.speaker_match_threshold,
+            "gated_models": list(diarize.GATED_MODELS),
+        },
+        "agents": cfg.agent_names,
+        "mcp_tier_scope": sorted(cfg.mcp_tiers),
         "prune_min_age_days": cfg.prune_min_age_days,
         "summarize_min_seconds": cfg.summarize_min_seconds,
     }

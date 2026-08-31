@@ -65,14 +65,16 @@ visible rather than hiding it behind a confident interface.
 `plaudctl run` executes six stages under a single advisory lock:
 
 ```
-sync → transcribe → summarize → sentiment → notes → extract → index → tier
+sync → transcribe → diarize → summarize → title → sentiment → notes → extract → index → tier
 ```
 
 | Stage | Engine | Produces |
 |---|---|---|
 | `sync` | Plaud API + httpx | `audio/YYYY/MM/*.mp3`, verification facts |
 | `transcribe` | mlx-whisper (Apple GPU) / faster-whisper | `transcripts/*.txt` |
+| `diarize` | pyannote (optional) | `diarization/*.json`, `recording_speakers` rows, named transcripts |
 | `summarize` | qwen3:8b via Ollama | `summaries/*.md` |
+| `title` | qwen3:8b via Ollama | `recordings.title` |
 | `sentiment` | qwen3:8b via Ollama | `sentiment` rows |
 | `notes` | — | one Obsidian note per recording |
 | `extract` | qwen3:8b via Ollama | `actions` rows (proposed) |
@@ -233,6 +235,104 @@ may legitimately end up empty.
 from the listing. Proven by a test that syncs against a client returning zero
 recordings and asserts all local rows and audio files survive.
 
+### D17 — A title is written from the summary, and a human's is never overwritten
+Plaud names a file after the clock. That is fine for a filesystem and useless for an
+inbox: thirty rows of timestamps tell you nothing about which one was the call with the
+lawyer.
+
+Titles are generated from the **summary**, not the transcript, because the summary has
+already done the map-reduce over a long conversation and its Key points are a far better
+title source than the first 8k characters of raw ASR. Recordings under
+`summarize_min_seconds` never get summarized, and those are exactly the voice memos whose
+timestamp tells you least — so they fall back to the transcript.
+
+Two guards, both measured against the failure they exist to prevent:
+- **`title_source` records who wrote it.** `--force` re-titles the machine's own work and
+  never yours, the same rule triage lives by. Clearing the title in the console is how you
+  say "your title was wrong, try again".
+- **A title that names nothing is refused.** A model that cannot find a subject reaches
+  for "Business Discussion", and thirty of those are no better than thirty timestamps. If
+  every word of the proposal is generic the recording stays unnamed, which is honest.
+  Measured on the live corpus: 49 of 50 named, 1 correctly declined.
+
+The device's filename is shown alongside the title everywhere, so a title you disagree
+with never hides what the file actually is.
+
+### D18 — Only a human confirmation builds a voiceprint
+Diarization produces anonymous labels — `SPEAKER_00` — which are per-recording and
+useless across an archive, because `SPEAKER_00` is a different person in every file. The
+value is entirely in the identity laid over them: name a voice once, keep its embedding
+as a **voiceprint**, and the next recording matches by voice rather than asking again.
+
+The obvious implementation feeds every match back into the mean, and it is wrong. An
+automatic match that is treated as evidence compounds: the identity slowly becomes
+whoever the machine has been mistaking for you, and nothing in the data says when it went
+wrong. So `source` distinguishes `human` from `voiceprint`, only `human` rows build the
+mean, and the console draws a machine match as a visible guess rather than as a fact.
+
+Three properties follow, each covered by a test:
+- **Re-running diarization never un-names anybody.** Attribution lives in its own column,
+  exactly as triage survives a re-sync.
+- **A correction reaches the identity, not just the label.** Taking back an attribution
+  rebuilds that person's voiceprint without it, so a mistake does not stay baked in.
+- **The rendered transcript is derived, never authoritative.** Names are re-applied from
+  the database on demand, so a rename rewrites every transcript that person appears in.
+
+The mean is weighted by speaking time: a thirty-second cameo should not move an identity
+as far as an hour of conversation. Degenerate embeddings are dropped — pyannote pads
+under-sampled clusters with zeros, and a zero vector matches everything at cosine 0 and
+nothing usefully.
+
+### D19 — Diarization is optional, and its absence must not turn the pill amber
+pyannote pulls ~2 GB of torch and needs a HuggingFace licence accepted for two gated
+models. That is a real cost to impose on somebody who only wants transcripts, so it is an
+extra (`pip install 'plaudvault[speakers]'`) and every other stage works without it.
+
+The consequence that matters is in freshness: if undiarized recordings counted as
+outstanding work on a machine with no token, the indicator would sit amber forever over
+work nobody can do — the exact cry-wolf failure D11 and D15 exist to prevent. So the
+diarize stage reports zero pending unless diarization is actually available, and
+`plaudctl speakers status` says precisely what is missing and which licence page to open.
+
+### D20 — Only an accepted action can be dispatched, and a report is not a completion
+Handing an action to an agent points something that can act in the world at a sentence a
+small model extracted from noisy ASR of a family conversation. Three constraints, and
+none of them has an override flag:
+
+1. **Only `accepted` (or `in_progress`) can be handed over.** `proposed` is the
+   extractor's guess, and D10/B8 measure it as over-proposing. Requiring acceptance means
+   a human read the quote before anything could act on it.
+2. **Dispatch is a request, never an execution.** plaudvault writes a row and waits.
+   Whatever the agent can do, it could already do; this only tells it what you want, so
+   the blast radius is the agent's and not the archive's.
+3. **A finished job is a report.** The result lands on the dispatch row and the action
+   stays open. An agent that believes it booked a meeting and did not must not be able to
+   tick the box itself.
+
+The quote and the recording travel with the job, because an agent told to "set up the
+meeting" with no source cannot tell a real commitment from a garbled one — the same
+reason D9's quote verification exists. Claiming is atomic (the status guard is in the
+`UPDATE`, not a read-then-write), so two agents polling one queue cannot both believe
+they won.
+
+### D21 — The MCP server sees everything except `exclude`, not only `stack`
+§9 settles that the *cognitive stack* sees `stack`-tiered recordings only, and that has
+not changed. This is a different client: an MCP server on stdio, launched by the owner's
+own agent on the owner's own machine, which is nearer to the console than to a corpus
+crossing a boundary. Scoping it to `stack` would have made it useful for 7 of 57
+recordings and answered almost nothing.
+
+So `mcp_tier_scope` defaults to `stack,local,untriaged` — what the console shows. Three
+things keep that from being a quiet widening of the archive's blast radius:
+- **`exclude` is unreachable through every path** and is not expressible in the scope.
+- **Audio is never served.** The transcript is the surface.
+- **The scope is per-invocation.** `plaudctl mcp --tiers stack` hands a particular client
+  a narrower view than the console has, so a client that should not see family
+  conversations does not, without changing the config for the others.
+
+Tier is still enforced in exactly one place. What changed is the default, and it is
+recorded here because the reasoning is the sort that gets re-litigated.
+
 ### D14 — qwen3:8b, not the largest model available
 `qwen3.8` (27.3B, Q4_K_M, 17.7 GB) was pulled and **cannot load** on a 24 GB machine:
 5m04s of thrashing, swap climbing, then `timed out waiting for llama-server to start`,
@@ -250,32 +350,32 @@ a mid-corpus change puts a seam in the trend that looks like a mood shift and is
 ## 5. Status
 
 <!-- BEGIN:STATUS (generated — do not edit by hand) -->
-_Generated 2026-08-24 from git and the live archive._
+_Generated 2026-08-30 from git and the live archive._
 
 ### Codebase
 
 | | |
 |---|---|
-| Python modules | 23 |
-| Lines of Python | 5,943 |
-| Commits | 13 |
-| CLI verbs | 20 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
+| Python modules | 27 |
+| Lines of Python | 8,075 |
+| Commits | 14 |
+| CLI verbs | 25 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `story.py` (804), `web.py` (579), `store.py` (533), `cli.py` (459), `metrics.py` (320), `service.py` (283).
+Largest modules: `store.py` (832), `web.py` (825), `story.py` (804), `cli.py` (727), `diarize.py` (456), `mcp_server.py` (417).
 
 ### Live archive
 
 | | |
 |---|---|
-| Recordings | 37 |
-| Transcribed | 37 |
-| Tone scored | 36 |
-| Indexed chunks | 788 |
-| Triaged | 10 |
-| Open commitments | 0 |
-| Action events | 779 |
-| Audio captured | 22.0 hours |
-| Tiers | exclude 1 · local 2 · stack 7 |
+| Recordings | 57 |
+| Transcribed | 57 |
+| Tone scored | 56 |
+| Indexed chunks | 1,258 |
+| Triaged | 45 |
+| Open commitments | 161 |
+| Action events | 989 |
+| Audio captured | 36.2 hours |
+| Tiers | exclude 3 · local 1 · stack 41 |
 
 <!-- END:STATUS -->
 
@@ -289,6 +389,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-30 | Name the recordings, name the voices, and let an agent do the work |
 | 2026-08-24 | Replace a real consultation quote in the journeys diagram with a synthetic one |
 | 2026-08-24 | Bulk edits, and the corpus drawn as themes over time |
 | 2026-08-24 | Draw a recording along its own duration, not as a grid of cards |
@@ -314,10 +415,8 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 
 | # | Item | Why |
 |---|---|---|
-| B1 | **Ask-with-citations over the index** (`plaudctl ask`, `/api/ask`, console tab) | The retrieval half already exists. Answers must carry per-claim citations to recording + timestamp, so the answer is an index *into* evidence, never a replacement for it. |
-| B2 | **MCP tool exposing search + ask** | Makes plaudvault a retrieval service the Cognitive Stack calls, with tiering enforced at the single source. The stack never holds a copy of the vectors. See §9. |
-| B3 | **Retrieval evaluation harness** | Everything above rests on retrieval quality nobody has measured properly. A labelled query set, measured rank, run on every change. Also settles the open prefix question (D-open-1). |
-| B4 | **Neighbour expansion for answer context** | Chunks are 1200 chars, tuned for search snippets. RAG wants the hit plus its neighbours. |
+| B3 | **Retrieval evaluation harness** | Everything rests on retrieval quality nobody has measured properly — and now an MCP client answers questions from it, so the stakes went up. A labelled query set, measured rank, run on every change. Also settles the open prefix question (D-open-1). |
+| B4 | **Neighbour expansion for answer context** | Chunks are 1200 chars, tuned for search snippets. An MCP client answering a question wants the hit plus its neighbours; `get_transcript` with a time window is the manual version of this. |
 | B5 | **Date/tier filters ahead of vector search** | "What did I commit to last week" is a metadata question. Similarity alone cannot answer it. |
 
 ### Later — valuable, design not settled
@@ -325,7 +424,9 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 | # | Item | Open question |
 |---|---|---|
 | B6 | **Topic trends over time** | Aggregation, not retrieval — clustering or per-period map-reduce. "How has my thinking on X changed" is a different build from RAG. |
-| B7 | **Speaker diarization** | `pyannote.audio` closes it at the cost of a gated-model login. Would materially improve extraction (who committed?) and tone. |
+| B11 | **Re-extract after diarization** | Named transcripts should improve `owner` on extracted commitments, which is half of B8. Nothing re-runs extraction when speakers change, so the gain is currently only realised on recordings diarized before their first extract. |
+| B12 | **Contact-reference resolution** | `speakers.external_ref` carries an opaque id and nothing resolves it. Making "map this conversation to my CRM" real needs a resolver per system, and the question is whether plaudvault should hold one at all or hand the string to the agent. |
+| B13 | **Reaching the archive from off-machine** | The MCP server is stdio and the console is loopback-only, so an agent on a remote VM cannot reach either. Needs a real identity proxy before it needs code — see Rejected. |
 | B8 | **Better commitment precision** | 63→18 proposals after D10, but roughly half the survivors are rhetorical ("Make this a reality"). Rhetoric and commitment are grammatically identical to an 8B model. Needs a larger model or a second-pass judge — both were rejected once already. |
 | B9 | **Backup/restore command** | The precious/derived split in the data-model diagram is the spec. Nobody has written the command. |
 | B10 | **Notification when a scheduled run fails** | A 07:00 sync with the drive unmounted is a silent no-op. Freshness surfaces it only if you look. |
@@ -338,18 +439,23 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 | `qwen3.8` / larger local model | D14. Physically cannot load on 24 GB. |
 | Filtering suggestions out of the LLM response | D10. Asking and discarding still spends the model's attention inventing them. |
 | Pure verbatim quote matching | D9. Measured: would discard 23 sound actions to catch 2 bad ones. |
-| Exposing the console beyond loopback | No auth by design. Would need a real identity proxy first. |
+| Exposing the console beyond loopback | No auth by design. Would need a real identity proxy first. An agent on a remote VM reaching this archive is B13, and it is a networking-and-identity problem, not a plaudvault feature. |
+| Feeding automatic speaker matches back into voiceprints | D18. One bad match compounds into a drifting identity with nothing in the data saying when it went wrong. |
+| A flag to dispatch a `proposed` action | D20. The acceptance step *is* the human reading the quote. |
 
 ---
 
 ## 8. Roadmap
 
-**Now — trustworthy recall.** B3 first (measure what we have), then B1 and B4. The
-sequencing is deliberate: building answers on unmeasured retrieval is how you get a
-system that sounds authoritative and is wrong.
+**Now — trustworthy recall.** B3, urgently. An MCP client is now answering questions out
+of this index, which means unmeasured retrieval quality has stopped being a private
+problem: a system that sounds authoritative and is wrong is exactly what a cited answer
+built on a bad hit looks like. Then B4.
 
-**Next — the stack integration.** B2. Once ask-with-citations exists locally, exposing it
-as a tool is small, and it settles the boundary question in §9 permanently.
+**Next — make the identity layer earn its cost.** Diarization is built but starts empty,
+and its value is entirely in what gets named. The first real test is whether naming
+yourself once actually carries across the corpus on real audio; then B11, because named
+transcripts are the cheapest available attack on B8.
 
 **Then — extraction quality, or retire the ambition.** B8 is the weakest part of the
 product. Either it gets materially better, or the honest move is to reframe the Actions
@@ -379,7 +485,18 @@ plaudvault rather than re-index.**
    other sources.
 
 Note the corpora differ and always will: the stack sees only `stack`-tiered recordings
-(7 of 32 at time of writing), by design.
+(7 of 57 at time of writing), by design.
+
+**Since B2 shipped, "the stack should call plaudvault" is literal.** `plaudctl mcp`
+serves search, transcripts, speakers and the action queue over stdio to any MCP client.
+It returns cited passages and never paraphrases — the client's model does the synthesis,
+which is why B1 (ask-with-citations *inside* plaudvault) was dropped rather than built:
+the retrieval belongs here, the synthesis belongs in whatever asked, and a paraphrase
+with no timestamp is exactly the thing you cannot check.
+
+The MCP client's scope is a *different* question from the stack's corpus, and D21
+settles it: the default is what the console sees, because the server is launched by your
+own agent on your own machine. `--tiers stack` narrows it per client.
 
 ---
 
@@ -387,6 +504,17 @@ Note the corpora differ and always will: the stack sees only `stack`-tiered reco
 
 Stated plainly because each one is a way this product can mislead you.
 
+- **Speaker identity is a similarity judgement, not recognition.** A voiceprint match is
+  cosine similarity above a threshold. Two similar voices, a bad line, or a recording where
+  somebody is ill will all move it. The console draws machine matches as guesses for this
+  reason; treat an unconfirmed name as a prompt to check, not as a fact.
+- **Diarization does not know who anybody is.** It knows how many voices there are and
+  when each spoke. Everything else is the identity layer, which starts empty.
+- **A title is a summary of a summary.** It inherits every weakness of the summary it was
+  written from, compressed further. It is a way to find a recording, not a description of
+  one.
+- **An agent's report is unverified.** plaudvault records what the agent said it did. It
+  has no way to check, which is why the action stays open until you close it.
 - **Tone scores are estimates over ASR.** A transcript has no tone of voice, so sarcasm,
   warmth, and a calm discussion of something painful all read the same on the page.
 - **Confidence is currently uninformative** (D5). Treat valence as the useful number.
