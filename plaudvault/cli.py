@@ -120,12 +120,36 @@ def cmd_speakers(args, cfg) -> int:
     action = args.action
 
     if action == "login":
+        # A secret must not arrive as an argv token — that puts it in shell history
+        # and in every `ps` listing on the machine. So it comes from a hidden prompt
+        # when there is a terminal, and from stdin when there is not: a piped token
+        # covers scripts, CI, and the no-TTY shells embedded in editors and agents,
+        # where getpass raises rather than prompting.
         import getpass
 
-        token = getpass.getpass("  HuggingFace token (hf_...): ").strip()
+        if sys.stdin.isatty():
+            try:
+                token = getpass.getpass("  HuggingFace token (hf_...): ").strip()
+            except (EOFError, OSError):
+                token = ""
+        else:
+            token = sys.stdin.readline().strip()
+            if not token:
+                print("error: no terminal to prompt on, and nothing on stdin.",
+                      file=sys.stderr)
+                print("  pipe the token in:  echo hf_xxx | plaudctl speakers login",
+                      file=sys.stderr)
+                print(f"  or set it for one run:  export {cfg.hf_token_env}=hf_xxx",
+                      file=sys.stderr)
+                return 2
         if not token:
             print("  nothing entered")
             return 1
+        if not token.startswith("hf_"):
+            # Caught here rather than 40 minutes into a diarization run that 401s.
+            print(f"error: that does not look like a HuggingFace token "
+                  f"(expected it to start with 'hf_', got {token[:4]!r}…)", file=sys.stderr)
+            return 2
         auth.keychain_set(cfg.keychain_service, "huggingface", token)
         print(f"  stored in the OS keyring (service={cfg.keychain_service})")
         print("  the diarization models are gated — accept the licence at:")

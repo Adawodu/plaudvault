@@ -357,11 +357,11 @@ _Generated 2026-08-30 from git and the live archive._
 | | |
 |---|---|
 | Python modules | 27 |
-| Lines of Python | 8,075 |
-| Commits | 14 |
+| Lines of Python | 8,099 |
+| Commits | 15 |
 | CLI verbs | 25 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `store.py` (832), `web.py` (825), `story.py` (804), `cli.py` (727), `diarize.py` (456), `mcp_server.py` (417).
+Largest modules: `store.py` (832), `web.py` (825), `story.py` (804), `cli.py` (751), `diarize.py` (456), `mcp_server.py` (417).
 
 ### Live archive
 
@@ -389,6 +389,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-30 | Take the HuggingFace token from stdin when there is no terminal |
 | 2026-08-30 | Name the recordings, name the voices, and let an agent do the work |
 | 2026-08-24 | Replace a real consultation quote in the journeys diagram with a synthetic one |
 | 2026-08-24 | Bulk edits, and the corpus drawn as themes over time |
