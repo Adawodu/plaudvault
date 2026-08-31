@@ -267,12 +267,18 @@ def speakers():
                 {**_row(sp), "voiceprint": None, "has_voiceprint": bool(sp["voiceprint"])}
                 for sp in store.speakers()
             ],
+            "min_seconds": cfg.speaker_min_seconds,
+            # Below the floor they are hidden, never dropped — and the count is always
+            # printed, because quiet by default must not become silently missing.
+            "brief_voices": len(store.unnamed_labels()) - len(
+                store.unnamed_labels(cfg.speaker_min_seconds)
+            ),
             "unknown": [
                 {"recording_id": r["recording_id"], "label": r["label"],
                  "minutes": round((r["seconds"] or 0) / 60, 1), "turns": r["turns"],
                  "recording": r["title"] or r["filename"],
                  "recorded_iso": time.strftime("%Y-%m-%d", time.localtime(r["started_at"]))}
-                for r in store.unnamed_labels()
+                for r in store.unnamed_labels(cfg.speaker_min_seconds)
             ],
         }
 

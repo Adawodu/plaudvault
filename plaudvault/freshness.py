@@ -178,7 +178,7 @@ def local(cfg: Config, store: Store) -> dict:
     stack = _stack_drift(cfg, store)
     untriaged = store.untriaged()
     proposed = store.actions(status="proposed")
-    unnamed = store.unnamed_labels()
+    unnamed = store.unnamed_labels(cfg.speaker_min_seconds)
     finished = store.dispatches(status="done") + store.dispatches(status="failed")
     unreviewed = [d for d in finished if not d["reviewed_at"]]
 

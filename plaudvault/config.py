@@ -96,6 +96,13 @@ DEFAULTS: dict = {
     "speaker_match_threshold": 0.65,
     # Diarizing a 20-second memo produces one speaker and costs a model load.
     "diarize_min_seconds": 60,
+    # A voice must speak this long before you are asked to name it. A pin in a shop
+    # picks up the shopkeeper, a passing conversation and a child three aisles away;
+    # measured on real recordings, a family outing produced eight voices of which
+    # three spoke under half a minute. Those are real, and they are not people you
+    # will ever name — leaving them in the queue makes it a list you stop opening.
+    # They stay visible on the recording itself; only the work list is filtered.
+    "speaker_min_seconds": 30,
 
     # ---- agent dispatch / MCP ---------------------------------------------
     # Which tiers an MCP client may read. 'stack' is the strictest (see the product
@@ -147,6 +154,7 @@ class Config:
     hf_token_env: str
     speaker_match_threshold: float
     diarize_min_seconds: int
+    speaker_min_seconds: int
     mcp_tier_scope: str
     agents: str
     extract_suggestions: bool

@@ -274,6 +274,29 @@ def test_a_degenerate_embedding_matches_nobody(archive):
     assert diarize.match(store, np.zeros(DIM), threshold=0.65) == (None, 0.0)
 
 
+def test_brief_voices_are_kept_out_of_the_naming_queue(archive):
+    """A pin in a shop hears passers-by. They are real, and not people you will name.
+
+    Measured on a real family outing: eight voices, three of them under half a minute.
+    Leaving those in the work list makes it a list you stop opening — the same
+    cry-wolf failure D11 and D15 exist to prevent. They stay attached to their
+    recording; only the queue is filtered, and the hidden count is always printed.
+    """
+    cfg, store = archive
+    labels = {r["label"]: r for r in store.recording_speakers("rec1")}
+    # SPEAKER_01 spoke for 29 seconds in the fixture; SPEAKER_00 for 59.
+    assert labels["SPEAKER_01"]["seconds"] < 30 <= labels["SPEAKER_00"]["seconds"]
+
+    queue = {(r["recording_id"], r["label"]) for r in store.unnamed_labels(30)}
+    assert ("rec1", "SPEAKER_00") in queue
+    assert ("rec1", "SPEAKER_01") not in queue
+
+    # Hidden, never dropped: still there on the recording, and still findable.
+    assert ("rec1", "SPEAKER_01") in {
+        (r["recording_id"], r["label"]) for r in store.unnamed_labels()
+    }
+
+
 def test_segments_are_attributed_by_maximum_overlap():
     """Whisper's boundaries and pyannote's disagree; a segment goes to whoever spoke most."""
     segments = [

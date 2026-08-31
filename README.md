@@ -288,6 +288,12 @@ Two rules keep that honest:
   person's voiceprint without it, and renaming somebody rewrites every transcript they
   appear in.
 
+A voice must speak for 30 seconds (`speaker_min_seconds`) before you are asked to name
+it. A pin worn through a shopping trip hears the shopkeeper and a child three aisles away
+— on a real recording that was eight voices, three under half a minute. They stay on the
+recording and can still be named there; only the work list is filtered, and the hidden
+count is always shown. `plaudctl speakers unknown --all` includes them.
+
 Each person carries an optional **contact reference** — an opaque id pointing at whatever
 system holds the rest of that relationship. plaudvault never has to know whose CRM it is;
 it carries the string, and an agent asking `list_speakers` can join a voice to a record.

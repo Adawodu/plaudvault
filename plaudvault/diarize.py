@@ -35,7 +35,7 @@ from pathlib import Path
 
 from .config import Config
 from .store import Store
-from .transcribe import _format_ts, transcript_paths
+from .transcribe import SAMPLE_RATE, _format_ts, load_audio, transcript_paths
 
 # pyannote's models are gated: free, but each needs its licence accepted while signed
 # in. Listing both means the error can say which page to open rather than "401".
@@ -132,8 +132,23 @@ def diarize_file(cfg: Config, audio: Path, *, num_speakers: int | None = None) -
     speech removed, and a whisper segment must map to exactly one speaker — with
     overlaps kept, crosstalk would attribute the same words to two people.
     """
+    import torch
+
     pipe = _pipeline(cfg)
-    out = pipe(str(audio), **({"num_speakers": num_speakers} if num_speakers else {}))
+    # Decode in-process with PyAV and hand pyannote a waveform, rather than giving it a
+    # path and letting it reach for its own decoder. pyannote 4 loads audio through
+    # torchcodec, which links against FFmpeg's shared libraries and fails with
+    # `Library not loaded: libavutil.56` on a machine that has no system FFmpeg — which
+    # is most of them, and deliberately this one: transcription already avoids that
+    # dependency for exactly this reason, and installing Homebrew's ffmpeg to satisfy a
+    # transitive C++ dependency would undo it. `load_audio` is the same 16 kHz mono
+    # decode the transcript came from, so both stages now see identical samples.
+    samples = load_audio(audio)
+    waveform = torch.from_numpy(samples).unsqueeze(0)  # pyannote wants (channel, time)
+    out = pipe(
+        {"waveform": waveform, "sample_rate": SAMPLE_RATE},
+        **({"num_speakers": num_speakers} if num_speakers else {}),
+    )
 
     # pyannote 3.x returns a bare Annotation; 4.x returns a dataclass. Support both so
     # a version bump does not silently produce a transcript with no speakers in it.

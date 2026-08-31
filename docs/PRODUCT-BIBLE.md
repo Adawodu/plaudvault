@@ -283,6 +283,36 @@ as far as an hour of conversation. Degenerate embeddings are dropped — pyannot
 under-sampled clusters with zeros, and a zero vector matches everything at cosine 0 and
 nothing usefully.
 
+### D22 — Decode for pyannote with PyAV, not with its own loader
+pyannote 4 reads audio through `torchcodec`, which links against FFmpeg's shared
+libraries. On a machine with no system FFmpeg it fails with `Library not loaded:
+libavutil.56` — and this machine deliberately has none, because transcription already
+decodes in-process with PyAV precisely to avoid that dependency (and the broken Homebrew
+ffmpeg that comes with it).
+
+Installing FFmpeg to satisfy a transitive C++ dependency would have undone a decision the
+project already made. Instead the pipeline is handed a waveform: `load_audio` — the same
+16 kHz mono decode the transcript came from — produces a tensor that pyannote accepts in
+place of a path. Two things follow: there is still no system dependency to install, and
+diarization and transcription now see byte-identical samples, so their timestamps cannot
+drift apart because two decoders disagreed.
+
+### D23 — A voice must speak for 30 seconds before you are asked to name it
+Found by running on the real corpus rather than by reasoning: a pin worn through a family
+shopping trip produced **eight** voices, three of them under half a minute — the
+shopkeeper, a passer-by, a child three aisles away. All of them real, none of them people
+anyone will ever name.
+
+Left unfiltered they dominate the naming queue by count, and a work list mostly full of
+items you will never action is a list you stop opening. That is the same failure D11 and
+D15 exist to prevent, arriving through a different door.
+
+`speaker_min_seconds` (default 30) filters the *queue* and the freshness count. It does
+not filter the recording: every voice still appears in that recording's speaker table and
+can still be named there, `--all` shows them, and the hidden count is always printed —
+because quiet by default must never become silently missing, which is the same guarantee
+`exclude` carries in the Library.
+
 ### D19 — Diarization is optional, and its absence must not turn the pill amber
 pyannote pulls ~2 GB of torch and needs a HuggingFace licence accepted for two gated
 models. That is a real cost to impose on somebody who only wants transcripts, so it is an
@@ -357,11 +387,11 @@ _Generated 2026-08-30 from git and the live archive._
 | | |
 |---|---|
 | Python modules | 27 |
-| Lines of Python | 8,099 |
-| Commits | 15 |
+| Lines of Python | 8,142 |
+| Commits | 16 |
 | CLI verbs | 25 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `store.py` (832), `web.py` (825), `story.py` (804), `cli.py` (751), `diarize.py` (456), `mcp_server.py` (417).
+Largest modules: `store.py` (838), `web.py` (831), `story.py` (804), `cli.py` (759), `diarize.py` (471), `mcp_server.py` (417).
 
 ### Live archive
 
@@ -389,6 +419,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-30 | Diarization survives contact with a real archive |
 | 2026-08-30 | Take the HuggingFace token from stdin when there is no terminal |
 | 2026-08-30 | Name the recordings, name the voices, and let an agent do the work |
 | 2026-08-24 | Replace a real consultation quote in the journeys diagram with a synthetic one |

@@ -747,12 +747,18 @@ class Store:
             f"AND {self.NOT_EXCLUDED} ORDER BY r.started_at DESC"
         ).fetchall()
 
-    def unnamed_labels(self) -> list[sqlite3.Row]:
-        """Diarized voices nobody has put a name to — the speaker inbox."""
+    def unnamed_labels(self, min_seconds: float = 0) -> list[sqlite3.Row]:
+        """Diarized voices nobody has put a name to — the speaker inbox.
+
+        `min_seconds` keeps passers-by out of the work list. They are still real and
+        still attached to their recording; they are just not people you are ever going
+        to name, and a queue full of them is one you stop opening.
+        """
         return self.db.execute(
             "SELECT rs.*, r.filename, r.title, r.started_at FROM recording_speakers rs "
             "JOIN recordings r ON r.id = rs.recording_id "
-            "WHERE rs.speaker_id IS NULL ORDER BY rs.seconds DESC"
+            "WHERE rs.speaker_id IS NULL AND rs.seconds >= ? ORDER BY rs.seconds DESC",
+            (min_seconds,),
         ).fetchall()
 
     # ------------------------------------------------------------------ dispatch

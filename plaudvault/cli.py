@@ -198,9 +198,12 @@ def cmd_speakers(args, cfg) -> int:
             return 0
 
         if action == "unknown":
-            rows = store.unnamed_labels()
+            floor = 0 if args.all else cfg.speaker_min_seconds
+            rows = store.unnamed_labels(floor)
+            brief = len(store.unnamed_labels()) - len(rows)
             if not rows:
-                print("  every diarized voice has a name")
+                print("  every diarized voice has a name"
+                      + (f" ({brief} brief ones hidden — --all to see them)" if brief else ""))
                 return 0
             print(f"  {len(rows)} unnamed voices, longest-speaking first:\n")
             for r in rows[: args.limit or 25]:
@@ -209,6 +212,9 @@ def cmd_speakers(args, cfg) -> int:
                 mins = (r["seconds"] or 0) / 60
                 print(f"  {r['recording_id']}  {r['label']:<12} {mins:5.1f} min  "
                       f"{when}  {name[:44]}")
+            if brief:
+                print(f"\n  {brief} voice(s) under {cfg.speaker_min_seconds}s hidden — "
+                      "passers-by, not people. --all to see them.")
             print("\n  name one:  plaudctl speakers name <recording_id> <label> --name Bayo")
             return 0
 
@@ -618,7 +624,7 @@ def main(argv=None) -> int:
                         speakers=None, name=None, ref=None, note=None, me=False,
                         label=None, speaker=None, clear=False, threshold=None,
                         agent=None, status=None, instructions=None, id=None,
-                        tiers=None)
+                        tiers=None, all=False)
         return sp
 
     sp = add("login", cmd_login, "authenticate with Plaud (emailed one-time code)")
@@ -692,6 +698,8 @@ def main(argv=None) -> int:
     sp.add_argument("--ref", help="external contact/CRM reference, e.g. clarify:rec_123")
     sp.add_argument("--note", help="free-text note about this person")
     sp.add_argument("--clear", action="store_true", help="un-name a label")
+    sp.add_argument("--all", action="store_true",
+                    help="include voices too brief to be worth naming")
     sp.add_argument("--threshold", type=float, help="override the match threshold for `rematch`")
     sp.add_argument("--limit", type=int)
 
