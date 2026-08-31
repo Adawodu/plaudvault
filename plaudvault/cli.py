@@ -7,8 +7,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import (auth, diarize, dispatch, extract, freshness, notes, prune,
-               runlock, search, sentiment, service, setup_wizard, story,
+from . import (auth, diarize, dispatch, evaluate, extract, freshness, notes,
+               prune, runlock, search, sentiment, service, setup_wizard, story,
                summarize, sync, tiering, titles, transcribe)
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
@@ -334,6 +334,133 @@ def cmd_mcp(args, cfg) -> int:
     return 0
 
 
+def cmd_eval(args, cfg) -> int:
+    """Measure retrieval against a labelled query set, so claims about it are checkable."""
+    with Store(cfg.db_path) as store:
+        if args.action == "build":
+            kinds = tuple(k.strip() for k in (args.kinds or "direct,oblique").split(",")
+                          if k.strip())
+            s = evaluate.build(cfg, store, per_recording=args.per_recording,
+                               limit=args.limit, kinds=kinds)
+            print(f"\n  proposed {s['added']} queries — {s['total']} total, "
+                  f"{s['verified']} verified")
+            print(f"  {evaluate.golden_path(cfg)}")
+            print("  they are proposals: confirm the good ones with "
+                  "`plaudctl eval review`,")
+            print("  or measure them unverified with `--unverified` (optimistic).")
+            return 0
+
+        if args.action == "review":
+            golden = evaluate.load_golden(cfg)
+            pending = [g for g in golden if not g.get("verified")]
+            if not pending:
+                print(f"  every query is verified ({len(golden)} total)")
+                return 0
+            print(f"  {len(pending)} unverified. For each: is this a question you would")
+            print("  actually ask, and is it about the right recording?")
+            print("  [y] keep  [n] drop  [s] skip  [q] stop and save\n")
+            kept = dropped = 0
+            for i, g in enumerate(pending, 1):
+                print(f"  [{i}/{len(pending)}] {g['query']}")
+                print(f"        -> {g.get('recording','')[:60]}")
+                try:
+                    answer = input("        keep? [y/n/s/q] ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print("\n  stopping, saving what you decided")
+                    break
+                if answer == "q":
+                    break
+                if answer == "y":
+                    g["verified"] = True
+                    kept += 1
+                elif answer == "n":
+                    g["_drop"] = True
+                    dropped += 1
+            golden = [g for g in golden if not g.pop("_drop", False)]
+            evaluate.save_golden(cfg, golden)
+            print(f"\n  verified {kept}, dropped {dropped}, "
+                  f"{sum(1 for g in golden if not g.get('verified'))} still unreviewed")
+            return 0
+
+        if args.action == "run":
+            result = evaluate.run(cfg, store, verified_only=not args.unverified)
+            path = evaluate.save_result(cfg, result, label=args.label or "")
+            _print_eval(result)
+            print(f"\n  saved {path}")
+
+            previous = evaluate.latest_results(cfg, 2)
+            if len(previous) == 2:
+                cmp = evaluate.compare(previous[1], previous[0])
+                if cmp["changed_config"] or any(cmp["deltas"].values()):
+                    print("\n  against the previous run:")
+                    for k, (a, b) in cmp["changed_config"].items():
+                        print(f"      {k}: {a} -> {b}")
+                    for k, d in cmp["deltas"].items():
+                        if d:
+                            print(f"      {k}: {d:+.4f}")
+                    if cmp["confounded"]:
+                        print("      [!] the corpus ALSO changed between these runs —"
+                              " the delta cannot be attributed to the config change")
+            return 0
+
+        if args.action == "show":
+            results = evaluate.latest_results(cfg, 1)
+            if not results:
+                print("  no results yet — run: plaudctl eval run")
+                return 1
+            _print_eval(results[0])
+            return 0
+
+    print(f"error: unknown eval action {args.action!r}", file=sys.stderr)
+    return 2
+
+
+def _print_eval(result: dict) -> None:
+    m, c = result["metrics"], result["config"]
+    print(f"\n  {m['queries']} queries against {c['chunks']} chunks "
+          f"from {c['corpus_recordings']} recordings")
+    print(f"  {c['embed_model']} · {c['chunk_chars']}c chunks / {c['overlap_chars']}c overlap"
+          f" · query prefix {c['query_prefix'] or 'none'}\n")
+    for k in evaluate.REPORT_AT:
+        key = f"recall@{k}"
+        bar = "#" * round(m[key] * 40)
+        print(f"    {key:<10} {m[key]:.3f}  {bar}")
+    print(f"    {'MRR':<10} {m['mrr']:.3f}")
+
+    by_kind = result.get("by_kind") or {}
+    if len(by_kind) > 1:
+        print("\n  split by how the question was asked:")
+        for kind, s in by_kind.items():
+            what = {"direct": "names a person/company/number — the easy case",
+                    "oblique": "gist only, no shared vocabulary — the case that matters"}
+            print(f"      {kind:<9} {s['queries']:>3} queries   recall@1 {s['recall@1']:.3f}"
+                  f"   recall@5 {s['recall@5']:.3f}   MRR {s['mrr']:.3f}")
+            print(f"      {'':<9} {what.get(kind, '')}")
+
+    if result.get("saturated"):
+        print("\n  [!] recall@1 is at ceiling. This set can no longer detect a regression")
+        print("      or separate two configurations — there is no headroom either way.")
+        print("      Add harder queries: plaudctl eval build --kinds oblique")
+
+    if m["not_found"]:
+        print(f"\n    {m['not_found']} query(s) never surfaced their recording at all —"
+              " a recall problem, not a ranking one")
+
+    worst = [p for p in result["per_query"] if p["rank"] is None or p["rank"] > 5]
+    if worst:
+        print(f"\n  the {min(len(worst), 8)} worst:")
+        for p in worst[-8:] if len(worst) > 8 else worst:
+            where = f"rank {p['rank']}" if p["rank"] else "NOT FOUND"
+            print(f"      {where:<12} {p['query'][:62]}")
+            print(f"      {'':<12} wanted: {p['recording'][:58]}")
+
+    if not result["verified_only"]:
+        print("\n  [!] includes unverified generated queries. Each was written FROM the"
+              "\n      recording it is scored against, so this number is optimistic.")
+    print("\n  A question written from a transcript reuses its vocabulary, which flatters"
+          "\n  an embedding model. Read every number here as an upper bound on real recall.")
+
+
 def cmd_index(args, cfg) -> int:
     with Store(cfg.db_path) as store:
         s = search.run(cfg, store, limit=args.limit, force=args.force)
@@ -624,7 +751,8 @@ def main(argv=None) -> int:
                         speakers=None, name=None, ref=None, note=None, me=False,
                         label=None, speaker=None, clear=False, threshold=None,
                         agent=None, status=None, instructions=None, id=None,
-                        tiers=None, all=False)
+                        tiers=None, all=False, per_recording=2,
+                        unverified=False, kinds=None)
         return sp
 
     sp = add("login", cmd_login, "authenticate with Plaud (emailed one-time code)")
@@ -713,6 +841,17 @@ def main(argv=None) -> int:
 
     sp = add("mcp", cmd_mcp, "serve the archive to MCP clients over stdio")
     sp.add_argument("--tiers", help="override mcp_tier_scope, e.g. stack or stack,local")
+
+    sp = add("eval", cmd_eval, "measure retrieval against a labelled query set")
+    sp.add_argument("action", nargs="?", default="show",
+                    choices=["build", "review", "run", "show"])
+    sp.add_argument("--per-recording", type=int, default=2,
+                    help="how many queries to propose per recording (build)")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--unverified", action="store_true",
+                    help="include generated queries nobody has confirmed (optimistic)")
+    sp.add_argument("--label", help="tag this run, e.g. 'no-prefix' or 'chunk-800'")
+    sp.add_argument("--kinds", help="direct, oblique, or both (default both)")
 
     add("tier", cmd_tier, "reconcile PLAUD/stack/ with your triage decisions")
 

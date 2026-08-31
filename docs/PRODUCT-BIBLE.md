@@ -380,18 +380,18 @@ a mid-corpus change puts a seam in the trend that looks like a mood shift and is
 ## 5. Status
 
 <!-- BEGIN:STATUS (generated — do not edit by hand) -->
-_Generated 2026-08-30 from git and the live archive._
+_Generated 2026-08-31 from git and the live archive._
 
 ### Codebase
 
 | | |
 |---|---|
-| Python modules | 27 |
-| Lines of Python | 8,142 |
-| Commits | 16 |
-| CLI verbs | 25 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
+| Python modules | 28 |
+| Lines of Python | 8,624 |
+| Commits | 17 |
+| CLI verbs | 26 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `store.py` (838), `web.py` (831), `story.py` (804), `cli.py` (759), `diarize.py` (471), `mcp_server.py` (417).
+Largest modules: `cli.py` (898), `store.py` (838), `web.py` (831), `story.py` (804), `diarize.py` (471), `mcp_server.py` (416).
 
 ### Live archive
 
@@ -419,6 +419,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-31 | Measure retrieval instead of asserting it, and sketch the pipeline under Dagster |
 | 2026-08-30 | Diarization survives contact with a real archive |
 | 2026-08-30 | Take the HuggingFace token from stdin when there is no terminal |
 | 2026-08-30 | Name the recordings, name the voices, and let an agent do the work |
