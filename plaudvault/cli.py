@@ -169,7 +169,13 @@ def cmd_speakers(args, cfg) -> int:
             n_diar = store.db.execute(
                 "SELECT COUNT(*) FROM recordings WHERE diarized_at IS NOT NULL"
             ).fetchone()[0]
-            print(f"  {n_diar} recordings diarized, {len(store.unnamed_labels())} voices unnamed")
+            # The same floor the naming queue and freshness use. Reporting the raw
+            # count here and the filtered count everywhere else gives two answers to
+            # one question, which is how you stop trusting either.
+            worth_naming = store.unnamed_labels(cfg.speaker_min_seconds)
+            brief = len(store.unnamed_labels()) - len(worth_naming)
+            print(f"  {n_diar} recordings diarized, {len(worth_naming)} voices to name"
+                  + (f" ({brief} too brief to bother, --all to see them)" if brief else ""))
             print(f"  match threshold: {cfg.speaker_match_threshold} cosine")
         return 0
 

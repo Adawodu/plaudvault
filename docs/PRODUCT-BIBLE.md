@@ -387,11 +387,11 @@ _Generated 2026-08-31 from git and the live archive._
 | | |
 |---|---|
 | Python modules | 28 |
-| Lines of Python | 8,624 |
-| Commits | 17 |
+| Lines of Python | 8,630 |
+| Commits | 18 |
 | CLI verbs | 26 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `cli.py` (898), `store.py` (838), `web.py` (831), `story.py` (804), `diarize.py` (471), `mcp_server.py` (416).
+Largest modules: `cli.py` (904), `store.py` (838), `web.py` (831), `story.py` (804), `diarize.py` (471), `mcp_server.py` (416).
 
 ### Live archive
 
@@ -419,6 +419,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-31 | Report one unnamed-voice count, not two |
 | 2026-08-31 | Measure retrieval instead of asserting it, and sketch the pipeline under Dagster |
 | 2026-08-30 | Diarization survives contact with a real archive |
 | 2026-08-30 | Take the HuggingFace token from stdin when there is no terminal |
