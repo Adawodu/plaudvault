@@ -114,6 +114,64 @@ def test_trivially_short_questions_are_discarded():
     ]
 
 
+# ------------------------------------------------------------- prompt leakage
+
+
+@pytest.mark.parametrize("q", list(evaluate._EXAMPLES))
+def test_the_prompts_own_examples_are_rejected(q):
+    """D9's failure, in a new stage: the model returns the example instead of reading.
+
+    Measured on the first full build — 56 of 96 generated queries (58%) were the
+    prompt's own worked examples. Scored against the recordings they were nominally
+    generated for, they would have produced a confidently meaningless number that
+    looked like "retrieval is bad at paraphrase".
+    """
+    assert evaluate.is_leaked_example(q)
+
+
+@pytest.mark.parametrize("q", [
+    "Was I underpaid?",                              # punctuated
+    "  was i UNDERPAID  ",                           # cased and padded
+    "So, was I underpaid then",                      # the example inside a longer line
+    "underpaid",                                     # a fragment of it
+])
+def test_leaked_examples_are_caught_however_they_come_back(q):
+    assert evaluate.is_leaked_example(q)
+
+
+@pytest.mark.parametrize("q", [
+    "should we delay the move until later in the year",
+    "Did we decide to rent the house before October?",
+    "what did the garage quote for the transmission",
+])
+def test_real_questions_are_not_mistaken_for_leaks(q):
+    assert not evaluate.is_leaked_example(q)
+
+
+def test_a_query_asked_of_two_recordings_is_dropped():
+    """Whatever produced it, it cannot discriminate — so it is not evidence about either."""
+    rows = [
+        {"query": "what did we decide", "recording_id": "r1"},
+        {"query": "What did we decide?", "recording_id": "r2"},   # same, normalised
+        {"query": "why did the clinic pilot slip", "recording_id": "r3"},
+    ]
+    kept, dropped = evaluate.drop_ambiguous(rows)
+
+    assert dropped == 2
+    assert [r["recording_id"] for r in kept] == ["r3"]
+
+
+def test_a_verified_query_survives_the_ambiguity_filter():
+    """A human judgement is not overruled by a heuristic."""
+    rows = [
+        {"query": "what did we decide", "recording_id": "r1", "verified": True},
+        {"query": "what did we decide", "recording_id": "r2"},
+    ]
+    kept, _ = evaluate.drop_ambiguous(rows)
+
+    assert [r["recording_id"] for r in kept] == ["r1"]
+
+
 # ------------------------------------------------------------------ the golden set
 
 

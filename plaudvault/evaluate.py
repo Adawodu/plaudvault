@@ -31,6 +31,7 @@ with every result rather than filed in a doc.
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -88,17 +89,31 @@ def save_golden(cfg: Config, rows: list[dict]) -> None:
 # An `oblique` query is the case retrieval actually exists for and is worst at: you
 # remember the gist and none of the words. "Was I underpaid" against a transcript that
 # says "not exactly making it worth my while". That number is the one that moves.
+# The worked examples, named once so the leak filter below and the prompt can never
+# disagree about what they are. D9 found the same failure in extraction: a small model
+# sometimes returns the prompt's own example instead of reading the input, because the
+# example is the one thing in a prompt that looks exactly like a correct answer.
+# Measured on the first full build here: 56 of 96 generated queries — 58% — were these
+# strings, which would have produced a confidently meaningless oblique score.
+_EXAMPLES = (
+    "was I underpaid",
+    "when did we agree to kill the old importer",
+    "Why did we drop the second vendor?",
+)
+
 _KIND_RULES = {
     "direct": """Write them the way the person would actually type them months later.
 Naming a person, company, place or number from the recording is fine and expected.""",
-    "oblique": """Write them as somebody who remembers what the conversation was ABOUT
+    "oblique": f"""Write them as somebody who remembers what the conversation was ABOUT
 but none of the words in it:
 - Use NO proper nouns. No person, company, product or place names.
 - Use NO distinctive numbers, dates or figures from the text.
 - Do not reuse the summary's own vocabulary. Reach for the everyday phrase instead:
-  if the summary says "compensation was not competitive", write "was I underpaid".
-  If it says "we deprecated the legacy ingestion path", write "when did we agree to
-  kill the old importer".""",
+  if the summary says "compensation was not competitive", write "{_EXAMPLES[0]}".
+  If it says "we deprecated the legacy ingestion path", write
+  "{_EXAMPLES[1]}".
+- Those two are ILLUSTRATIONS OF STYLE. Never return them. Every question you write
+  must be about the summary below and nothing else.""",
 }
 
 BUILD_PROMPT = """Below is a summary of one audio recording.
@@ -110,7 +125,7 @@ Write {n} questions that this recording — and ideally only this recording — 
 In every case:
 - Ask about the substance: a decision, a disagreement, a commitment, a problem someone
   raised. Not the topic.
-- "What was discussed?" is useless. "Why did we drop the second vendor?" is a question.
+- "What was discussed?" is useless. "{example}" is a question.
 - Never name the recording, its date, or its title.
 - If the recording is too thin to ask {n} real questions about, write fewer.
 
@@ -120,6 +135,24 @@ SUMMARY:
 {summary}
 
 QUESTIONS:"""
+
+
+def _norm_query(q: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9 ]", " ", (q or "").lower()).split())
+
+
+def is_leaked_example(q: str) -> bool:
+    """Did the model hand back the prompt's own worked example instead of reading?
+
+    Checked both ways round, because it returns the example verbatim sometimes and a
+    fragment of it other times. Either way the query is about nothing in the corpus,
+    and scoring it against a recording it was never derived from measures noise while
+    looking exactly like a measurement.
+    """
+    n = _norm_query(q)
+    if len(n) < 6:
+        return True
+    return any(n == e or n in e or e in n for e in (_norm_query(x) for x in _EXAMPLES))
 
 
 def _parse_questions(raw: str) -> list[str]:
@@ -153,7 +186,7 @@ def build(cfg: Config, store: Store, *, per_recording: int = 2,
     if limit:
         rows = rows[:limit]
 
-    added = 0
+    added = leaked = 0
     print(f"  proposing questions from {len(rows)} summarized recordings · {cfg.llm_label}")
     for i, row in enumerate(rows, 1):
         summary = summary_path(cfg, row["id"]).read_text()
@@ -163,7 +196,8 @@ def build(cfg: Config, store: Store, *, per_recording: int = 2,
                 raw = _generate(
                     cfg,
                     BUILD_PROMPT.format(
-                        n=per_recording, rules=_KIND_RULES[kind], summary=summary[:6000]
+                        n=per_recording, rules=_KIND_RULES[kind],
+                        example=_EXAMPLES[2], summary=summary[:6000],
                     ),
                     timeout=180,
                 )
@@ -171,6 +205,9 @@ def build(cfg: Config, store: Store, *, per_recording: int = 2,
                 print(f"  [{i}/{len(rows)}] [fail:{kind}] {exc}")
                 continue
             for q in _parse_questions(raw)[:per_recording]:
+                if is_leaked_example(q):
+                    leaked += 1
+                    continue
                 if (row["id"], q.lower()) in seen:
                     continue
                 seen.add((row["id"], q.lower()))
@@ -194,8 +231,28 @@ def build(cfg: Config, store: Store, *, per_recording: int = 2,
         save_golden(cfg, existing)
         print(f"  [{i}/{len(rows)}] +{made}  {(row['title'] or row['filename'])[:48]}")
 
-    return {"added": added, "total": len(existing),
-            "verified": sum(1 for r in existing if r.get("verified"))}
+    kept, ambiguous = drop_ambiguous(existing)
+    save_golden(cfg, kept)
+    return {"added": added, "leaked": leaked, "ambiguous": ambiguous,
+            "total": len(kept),
+            "verified": sum(1 for r in kept if r.get("verified"))}
+
+
+def drop_ambiguous(rows: list[dict]) -> tuple[list[dict], int]:
+    """Remove any query proposed for more than one recording.
+
+    The general form of the leak check, and the one that catches what an explicit list
+    cannot anticipate: whatever produced it, a question asked of three different
+    recordings cannot discriminate between them, so scoring it against one is
+    meaningless. A query a human verified is kept regardless — that is a judgement, and
+    judgements are not overruled by a heuristic.
+    """
+    counts: dict[str, int] = {}
+    for r in rows:
+        key = _norm_query(r["query"])
+        counts[key] = counts.get(key, 0) + 1
+    kept = [r for r in rows if counts[_norm_query(r["query"])] == 1 or r.get("verified")]
+    return kept, len(rows) - len(kept)
 
 
 # ------------------------------------------------------------------ measuring

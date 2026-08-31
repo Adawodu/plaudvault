@@ -387,8 +387,8 @@ _Generated 2026-08-31 from git and the live archive._
 | | |
 |---|---|
 | Python modules | 28 |
-| Lines of Python | 8,630 |
-| Commits | 18 |
+| Lines of Python | 8,687 |
+| Commits | 19 |
 | CLI verbs | 26 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
 Largest modules: `cli.py` (904), `store.py` (838), `web.py` (831), `story.py` (804), `diarize.py` (471), `mcp_server.py` (416).
@@ -401,11 +401,11 @@ Largest modules: `cli.py` (904), `store.py` (838), `web.py` (831), `story.py` (8
 | Transcribed | 57 |
 | Tone scored | 56 |
 | Indexed chunks | 1,258 |
-| Triaged | 45 |
-| Open commitments | 161 |
-| Action events | 989 |
+| Triaged | 57 |
+| Open commitments | 0 |
+| Action events | 1,152 |
 | Audio captured | 36.2 hours |
-| Tiers | exclude 3 · local 1 · stack 41 |
+| Tiers | exclude 3 · local 1 · stack 53 |
 
 <!-- END:STATUS -->
 
@@ -419,6 +419,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-08-31 | Refuse generated queries that are the prompt's own examples |
 | 2026-08-31 | Report one unnamed-voice count, not two |
 | 2026-08-31 | Measure retrieval instead of asserting it, and sketch the pipeline under Dagster |
 | 2026-08-30 | Diarization survives contact with a real archive |
