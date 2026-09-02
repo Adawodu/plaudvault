@@ -638,17 +638,26 @@ class Store:
 
     # ------------------------------------------------------------------ speakers
 
-    def add_speaker(self, name: str, *, is_me: bool = False, external_ref: str = "",
+    def add_speaker(self, name: str, *, is_me: bool | None = None, external_ref: str = "",
                     note: str = "") -> int:
+        """Create this person, or reuse the existing one of that name.
+
+        `is_me=None` means "do not touch it", which is the difference between naming a
+        voice and rewriting a person. Naming a voice in a recording reuses whoever holds
+        that name; if that also reset their flag, confirming your own voice on a second
+        recording would quietly stop the archive believing you are you.
+        """
         now = int(time.time())
         self.db.execute(
             "INSERT INTO speakers (name, is_me, external_ref, note, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
-            "is_me = excluded.is_me, "
+            "VALUES (:name, COALESCE(:is_me, 0), :ref, :note, :now, :now) "
+            "ON CONFLICT(name) DO UPDATE SET "
+            "is_me = COALESCE(:is_me, speakers.is_me), "
             "external_ref = COALESCE(NULLIF(excluded.external_ref, ''), speakers.external_ref), "
             "note = COALESCE(NULLIF(excluded.note, ''), speakers.note), "
             "updated_at = excluded.updated_at",
-            (name.strip(), int(is_me), external_ref.strip(), note.strip(), now, now),
+            {"name": name.strip(), "is_me": None if is_me is None else int(is_me),
+             "ref": external_ref.strip(), "note": note.strip(), "now": now},
         )
         self.db.commit()
         return self.db.execute(

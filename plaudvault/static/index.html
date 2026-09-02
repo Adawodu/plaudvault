@@ -24,6 +24,12 @@ nav button.on{color:var(--gold);border-color:var(--rail-2);background:var(--pane
 
 main{padding:24px 28px 80px;max-width:1180px;margin:0 auto}
 .view{display:none}.view.on{display:block}
+.inline-name{width:100%;max-width:220px;background:transparent;border:1px solid transparent;
+  border-radius:6px;padding:3px 6px;font:inherit;color:inherit}
+.inline-name:hover{border-color:var(--rail)}
+.inline-name:focus{border-color:var(--accent);background:var(--panel-2);outline:none}
+.inline-name::placeholder{color:var(--faint);font-style:italic}
+.inline-name:disabled{opacity:.5}
 
 .banner{background:var(--destructive-soft);color:var(--destructive);border:1px solid var(--destructive);padding:12px 16px;border-radius:8px;margin-bottom:20px}
 .muted{color:var(--muted-foreground)}
@@ -256,8 +262,14 @@ audio{width:100%;margin:10px 0}
     </div>
     <div id="spkList"></div>
     <h2 style="margin-top:26px">Voices with no name</h2>
+    <p class="faint" style="max-width:70ch">Play a voice, type who it is, press Enter. A name
+      you have used before completes as you type and reuses that person rather than creating a
+      second one. For the rest — a contact reference, marking a voice as yourself, un-naming —
+      open the recording and use <b>change</b>.</p>
     <div id="spkUnknown"></div>
   </section>
+
+  <datalist id="spkNameList"></datalist>
 
   <section class="view" id="v-trends">
     <p class="muted">How the tone of what you record has moved over time. Every transcribed
@@ -586,7 +598,7 @@ $('#themeBtn').onclick = () => {
 
 let VIEW = 'inbox';
 function show(v){
-  if (v !== VIEW) { SEL.clear(); SEL_KIND = null; }
+  if (v !== VIEW) { SEL.clear(); SEL_KIND = null; stopSample(); }
   VIEW = v;
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v'+'-'+v));
   document.querySelectorAll('nav button[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === v));
@@ -987,7 +999,9 @@ document.addEventListener('keydown', e => {
 // ---------------------------------------------------------------- detail
 let CUR = null;
 async function openRec(id, atMs){
+  stopSample();
   await ensureNav(id);
+  loadSpeakerNames();          // so inline naming completes against people you already have
   CUR = await api('/api/recordings/'+id);
   const r = CUR;
   const tr = esc(r.transcript).replace(/\[(\d{2}:\d{2}:\d{2})\]/g,
@@ -1189,7 +1203,7 @@ async function loadActions(){
 $('#actFilter').onchange = () => loadActions();
 
 function dlg(html){ $('#dlgBody').innerHTML = html; $('#dlg').showModal(); }
-function closeDlg(){ $('#dlg').close(); }
+function closeDlg(){ stopSample(); $('#dlg').close(); }
 
 async function acceptAction(id){
   const systems = await api('/api/systems');
@@ -1272,6 +1286,114 @@ async function saveTitle(){
   closeDlg(); await refresh(); loadFreshness();
 }
 
+// ------------------------------------------------------- listening to a voice
+// Naming a voice you have never heard is guesswork, so every place that asks "who is
+// this?" can play the person first. Samples are offsets into the recording's own audio
+// — the browser seeks, nothing is cut server-side, and no clip of anyone's voice is
+// written to disk.
+const SAMPLES = {};          // "recId/label" -> [{start,end}]
+let SAMPLE_AUDIO = null;     // one element for the whole page: two voices at once is noise
+
+function stopSample(){
+  if (SAMPLE_AUDIO){ SAMPLE_AUDIO.pause(); SAMPLE_AUDIO.onT = null; }
+  document.querySelectorAll('[data-sample-btn]').forEach(b => {
+    b.textContent = b.dataset.idle || 'listen'; b.classList.remove('primary');
+  });
+}
+
+async function playSample(btn, recId, label){
+  const key = recId + '/' + label;
+  if (btn.classList.contains('primary')) return stopSample();   // pressing it again stops
+  stopSample();
+
+  if (!SAMPLES[key]){
+    btn.textContent = '…';
+    try {
+      SAMPLES[key] = (await api(`/api/recordings/${recId}/speakers/${encodeURIComponent(label)}/samples`)).samples;
+    } catch(e){ SAMPLES[key] = []; }
+  }
+  const clips = SAMPLES[key];
+  if (!clips.length){
+    btn.textContent = 'no clean sample';
+    setTimeout(()=>{ btn.textContent = btn.dataset.idle || 'listen'; }, 2200);
+    return;
+  }
+
+  if (!SAMPLE_AUDIO){
+    SAMPLE_AUDIO = new Audio();
+    SAMPLE_AUDIO.preload = 'none';
+    SAMPLE_AUDIO.addEventListener('timeupdate', () => {
+      if (SAMPLE_AUDIO.onT) SAMPLE_AUDIO.onT();
+    });
+  }
+  const src = `/api/recordings/${recId}/audio`;
+  if (!SAMPLE_AUDIO.src.endsWith(src)) SAMPLE_AUDIO.src = src;
+
+  let i = 0;
+  const play = () => {
+    if (i >= clips.length) return stopSample();
+    const c = clips[i];
+    btn.textContent = `■ ${i + 1} of ${clips.length}`;
+    btn.classList.add('primary');
+    SAMPLE_AUDIO.currentTime = c.start;
+    // Chained rather than concatenated: each clip is a separate moment in the
+    // conversation, and hearing the seam is the point — a label that is really two
+    // people sounds like two people here.
+    SAMPLE_AUDIO.onT = () => { if (SAMPLE_AUDIO.currentTime >= c.end){ i++; play(); } };
+    SAMPLE_AUDIO.play().catch(() => stopSample());
+  };
+  play();
+}
+
+function listenBtn(recId, label, text){
+  const t = text || 'listen';
+  return `<button class="btn sm" data-sample-btn data-idle="${t}"
+    title="Play a few seconds of this voice"
+    onclick="playSample(this,'${recId}','${esc(label)}')">${t}</button>`;
+}
+
+// ------------------------------------------------------------- inline naming
+// The dialog is still there for the full form (contact ref, "this is me", un-naming).
+// But the common case is a queue of unnamed voices and a name you already know, and
+// making that twelve dialogs is why the queue stays at 127.
+let SPEAKER_NAMES = [];
+
+async function loadSpeakerNames(){
+  try { SPEAKER_NAMES = (await api('/api/speakers')).speakers.map(p => p.name); }
+  catch(e){ SPEAKER_NAMES = []; }
+  const dl = $('#spkNameList');
+  if (dl) dl.innerHTML = SPEAKER_NAMES.map(n => `<option value="${esc(n)}">`).join('');
+}
+
+function inlineName(recId, label, value){
+  return `<input class="inline-name" list="spkNameList" value="${esc(value||'')}"
+    placeholder="who is this?" spellcheck="false"
+    onkeydown="if(event.key==='Enter'){this.blur()} if(event.key==='Escape'){this.value=this.defaultValue;this.blur()}"
+    onchange="saveInlineName(this,'${recId}','${esc(label)}')">`;
+}
+
+async function saveInlineName(el, recId, label){
+  const name = el.value.trim();
+  if (name === el.defaultValue.trim()) return;
+  el.disabled = true;
+  try {
+    // An empty box un-names, which is the same write with no name in it. Typing a name
+    // that already exists reuses that person rather than making a second one.
+    await jpost(`/api/recordings/${recId}/speakers/${encodeURIComponent(label)}`,
+                name ? {name} : {});
+    toast(name ? `${label} is ${name}` : `${label} un-named`);
+    stopSample();
+    await loadSpeakerNames();
+    if (CUR && CUR.id === recId) await refresh();
+    if ($('#v-speakers').classList.contains('on')) loadSpeakers();
+    loadFreshness();
+  } catch(e){
+    el.value = el.defaultValue;
+    toast('could not save that name');
+  }
+  el.disabled = false;
+}
+
 // ---------------------------------------------------------------- speakers
 function speakerChips(list){
   if (!list || !list.length) return '';
@@ -1296,24 +1418,25 @@ function speakerCard(r){
       <div><h3>Speakers</h3><div class="faint">Who is talking, and for how long. Naming a voice
         here teaches the archive that person everywhere.</div></div>
       <button class="btn sm" onclick="show('speakers')">manage people</button></div>
-    <table style="margin-top:10px"><thead><tr><th>Voice</th><th>Who</th><th>Speaking</th><th></th></tr></thead>
+    <table style="margin-top:10px"><thead><tr>
+      <th>Voice</th><th>Hear them</th><th>Who</th><th>Speaking</th><th></th></tr></thead>
     <tbody>${list.map(sp => `<tr>
       <td class="mono">${esc(sp.label)}</td>
-      <td>${sp.name
-        ? `<b>${esc(sp.name)}</b>${sp.is_me?' <span class="chip gold">you</span>':''}${
+      <td>${listenBtn(r.id, sp.label)}</td>
+      <td>${inlineName(r.id, sp.label, sp.name)}
+        ${sp.name ? (sp.is_me?'<span class="chip gold">you</span>':'') + (
             sp.source==='voiceprint'
-              ? ` <span class="chip warn" title="cosine ${(sp.confidence||0).toFixed(2)}">guess</span>`
-              : ' <span class="chip good">confirmed</span>'}`
-        : '<span class="faint">unnamed</span>'}</td>
+              ? `<span class="chip warn" title="cosine ${(sp.confidence||0).toFixed(2)}">guess</span>`
+              : '<span class="chip good">confirmed</span>') : ''}</td>
       <td class="muted">${sp.minutes} min</td>
-      <td><button class="btn sm" onclick="nameLabel('${r.id}','${esc(sp.label)}')">${
-        sp.name ? 'change' : 'name'}</button></td></tr>`).join('')}
+      <td><button class="btn sm" onclick="nameLabel('${r.id}','${esc(sp.label)}')"
+        title="Contact reference, marking this voice as yourself, un-naming">more…</button></td></tr>`).join('')}
     </tbody></table></div>`;
 }
 
 async function nameLabel(recId, label){
   const s = await api('/api/speakers');
-  dlg(`<h2 style="margin-top:0">Who is ${esc(label)}?</h2>
+  dlg(`<h2 style="margin-top:0">Who is ${esc(label)}? ${listenBtn(recId, label, 'listen')}</h2>
     <p class="faint">Confirming this stores the voice as that person's voiceprint, so the next
       recording finds them without asking. Only your confirmations build a voiceprint — machine
       matches never do, or one bad guess would slowly become somebody's identity.</p>
@@ -1358,6 +1481,9 @@ async function loadSpeakers(){
         then run <span class="mono">plaudctl speakers login</span> and
         <span class="mono">plaudctl diarize</span>.</div>`;
 
+  SPEAKER_NAMES = s.speakers.map(p => p.name);
+  $('#spkNameList').innerHTML = SPEAKER_NAMES.map(n => `<option value="${esc(n)}">`).join('');
+
   $('#spkList').innerHTML = s.speakers.length ? `<table><thead><tr>
       <th>Person</th><th>Recordings</th><th>Voiceprint</th><th>Contact ref</th><th></th>
     </tr></thead><tbody>${s.speakers.map(p => `<tr>
@@ -1375,12 +1501,16 @@ async function loadSpeakers(){
         move is to open one, find the voice that talks most, and confirm it as you.</div>`;
 
   $('#spkUnknown').innerHTML = s.unknown.length ? `<table><thead><tr>
-      <th>Recording</th><th>Voice</th><th>Speaking</th><th>When</th><th></th>
+      <th>Recording</th><th>Voice</th><th>Hear them</th><th>Who is it?</th>
+      <th>Speaking</th><th>When</th><th></th>
     </tr></thead><tbody>${s.unknown.map(u => `<tr>
       <td><a href="#" onclick="openRec('${u.recording_id}');return false">${esc(u.recording)}</a></td>
-      <td class="mono">${esc(u.label)}</td><td class="muted">${u.minutes} min</td>
+      <td class="mono">${esc(u.label)}</td>
+      <td>${listenBtn(u.recording_id, u.label)}</td>
+      <td>${inlineName(u.recording_id, u.label, '')}</td>
+      <td class="muted">${u.minutes} min</td>
       <td class="muted">${u.recorded_iso}</td>
-      <td><button class="btn sm" onclick="nameLabel('${u.recording_id}','${esc(u.label)}')">name</button></td>
+      <td><button class="btn sm" onclick="nameLabel('${u.recording_id}','${esc(u.label)}')">more…</button></td>
     </tr>`).join('')}</tbody></table>`
     : `<div class="empty">${s.ready
         ? 'Every diarized voice has a name.'

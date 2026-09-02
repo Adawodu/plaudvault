@@ -394,6 +394,38 @@ Reconciliation only ever unlinks *symlinks*. A real file that somehow lands in t
 is left alone, because this runs unattended over an external drive and losing a file to a
 tidy-up must not be a reachable outcome.
 
+### D25 — You hear a voice before you name it, and a sample is an offset not a file
+Naming a voice you have never heard is guesswork, and a guess here is expensive: a
+confirmed name becomes a voiceprint, and that voiceprint attributes speech in every later
+recording. Name the wrong person once and the archive agrees with you from then on, with
+nothing in the data saying when it went wrong (the same failure D18 refuses to create
+automatically). So every place that asks *who is this?* can now play them.
+
+**A sample is a pair of offsets, not a clip.** The console already has the audio and the
+browser can seek — `FileResponse` answers a Range request with 206 — so the server returns
+`{start, end}` and cuts nothing. That costs no ffmpeg, no disk, no cache invalidation when
+diarization is re-run, and it means no loose clip of somebody's voice ever exists as a
+file that could be copied somewhere the tier does not follow.
+
+Which seconds are chosen matters more than it looks. The longest turns win, because a long
+turn is one person talking rather than two people colliding. Each clip is taken from the
+**middle** of its turn, because diarization boundaries are exactly where the model is least
+certain and the first and last second are the likeliest to be somebody else. Clips play in
+time order rather than longest-first, so a label that is really two people sounds like two
+people.
+
+**Naming is inline; the dialog keeps the rest.** A queue of 127 unnamed voices is not
+127 dialogs. The common case — a voice you recognise and a name you have already used —
+is now type-and-Enter against a datalist of existing people, which reuses that person
+rather than creating a second one. The dialog remains for everything that is genuinely a
+decision: a contact reference, marking a voice as yourself, un-naming.
+
+That inline path exposed a real bug and it is worth recording. `add_speaker` is
+create-or-reuse by name, and its upsert overwrote `is_me` with whatever the caller passed.
+The dialog always sent the checkbox so nobody noticed; an inline rename sends only a name,
+which would have silently un-me'd you the second time you confirmed your own voice.
+`is_me=None` now means *do not touch it*, and only an explicit value changes it.
+
 ### D14 — qwen3:8b, not the largest model available
 `qwen3.8` (27.3B, Q4_K_M, 17.7 GB) was pulled and **cannot load** on a 24 GB machine:
 5m04s of thrashing, swap climbing, then `timed out waiting for llama-server to start`,
@@ -418,11 +450,11 @@ _Generated 2026-09-02 from git and the live archive._
 | | |
 |---|---|
 | Python modules | 29 |
-| Lines of Python | 8,835 |
-| Commits | 21 |
+| Lines of Python | 8,900 |
+| Commits | 22 |
 | CLI verbs | 27 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `browse`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `cli.py` (921), `store.py` (844), `web.py` (832), `story.py` (804), `diarize.py` (471), `mcp_server.py` (416).
+Largest modules: `cli.py` (921), `store.py` (853), `web.py` (844), `story.py` (804), `diarize.py` (515), `mcp_server.py` (416).
 
 ### Live archive
 
@@ -433,8 +465,8 @@ Largest modules: `cli.py` (921), `store.py` (844), `web.py` (832), `story.py` (8
 | Tone scored | 60 |
 | Indexed chunks | 1,506 |
 | Triaged | 57 |
-| Open commitments | 74 |
-| Action events | 1,228 |
+| Open commitments | 105 |
+| Action events | 1,259 |
 | Audio captured | 42.1 hours |
 | Tiers | exclude 3 · local 1 · stack 53 |
 
@@ -450,6 +482,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-09-02 | Hear a voice before you name it, and name it without opening a dialog |
 | 2026-09-02 | Copy a transcript in one click, and give the archive names a person can read |
 | 2026-09-02 | Count summarized against what is eligible, and show the title you already have |
 | 2026-08-31 | Refuse generated queries that are the prompt's own examples |
@@ -528,9 +561,10 @@ without it, B4 and B5 are improvements measured against a baseline that does not
 Then B4.
 
 **Next — make the identity layer earn its cost.** Diarization is built but starts empty,
-and its value is entirely in what gets named. The first real test is whether naming
-yourself once actually carries across the corpus on real audio; then B11, because named
-transcripts are the cheapest available attack on B8.
+and its value is entirely in what gets named. D25 removed the two things that made naming
+expensive — you can hear a voice before naming it, and naming is inline rather than a
+dialog — so the queue of 127 unnamed voices is now a sitting worth doing rather than an
+afternoon. Then B11, because named transcripts are the cheapest available attack on B8.
 
 **Then — extraction quality, or retire the ambition.** B8 is the weakest part of the
 product. Either it gets materially better, or the honest move is to reframe the Actions

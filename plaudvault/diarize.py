@@ -469,3 +469,47 @@ def rematch(cfg: Config, store: Store, *, threshold: float | None = None) -> dic
         render_transcript(cfg, store, rec_id)
     stats["recordings"] = len(stats["recordings"])
     return stats
+
+
+# ---------------------------------------------------------------------- samples
+
+# Long enough to recognise a voice, short enough that naming twelve of them is not an
+# afternoon. Below MIN a clip is usually a "yeah" and identifies nobody.
+SAMPLE_MAX_S = 8.0
+SAMPLE_MIN_S = 1.5
+
+
+def samples(cfg: Config, rec_id: str, label: str, *, n: int = 3) -> list[dict]:
+    """Where to listen to hear this voice, as offsets into the recording's own audio.
+
+    No audio is cut. The console already has the file and the browser can seek, so a
+    sample is a start and an end — which means this costs nothing, needs no ffmpeg, and
+    cannot leave a stray clip of somebody's voice on disk.
+
+    Picking matters more than it looks. The longest turns are chosen because a long turn
+    is one person talking rather than two people colliding, and each clip is taken from
+    the *middle* of its turn: diarization boundaries are where the model is least sure,
+    so the first and last second of a turn are the likeliest to be somebody else. They
+    are returned in time order, because hearing a voice early and late in a conversation
+    is how you notice it is actually two people.
+    """
+    path = diarization_path(cfg, rec_id)
+    if not path.exists():
+        return []
+    turns = json.loads(path.read_text()).get("turns") or []
+
+    mine = [t for t in turns if t.get("speaker") == label
+            and (t.get("end", 0) - t.get("start", 0)) >= SAMPLE_MIN_S]
+    mine.sort(key=lambda t: t["end"] - t["start"], reverse=True)
+
+    out = []
+    for t in mine[:n]:
+        span = t["end"] - t["start"]
+        take = min(span, SAMPLE_MAX_S)
+        mid = t["start"] + span / 2
+        start = max(t["start"], mid - take / 2)
+        out.append({"start": round(start, 2),
+                    "end": round(min(t["end"], start + take), 2),
+                    "turn_seconds": round(span, 1)})
+    out.sort(key=lambda s: s["start"])
+    return out

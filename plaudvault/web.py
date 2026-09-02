@@ -151,6 +151,15 @@ def audio(rec_id: str):
         return FileResponse(p, media_type="audio/mpeg")
 
 
+@app.get("/api/recordings/{rec_id}/speakers/{label}/samples")
+def speaker_samples(rec_id: str, label: str):
+    """Offsets where this voice is talking on its own, so you can hear who it is
+    before putting a name on them. The console seeks the existing audio to these;
+    nothing is cut and no clip is written anywhere."""
+    cfg = _cfg()
+    return {"samples": diarize.samples(cfg, rec_id, label)}
+
+
 @app.post("/api/recordings/{rec_id}/triage")
 def triage(rec_id: str, body: dict = Body(...)):
     cfg = _cfg()
@@ -365,7 +374,10 @@ def name_label(rec_id: str, label: str, body: dict = Body(...)):
                 raise HTTPException(404, "no such speaker")
         elif name:
             sid = store.add_speaker(
-                name, is_me=bool(body.get("is_me")),
+                name,
+                # Absent means "leave it alone" — an inline rename sends no is_me and
+                # must not un-me somebody who already is.
+                is_me=None if body.get("is_me") is None else bool(body.get("is_me")),
                 external_ref=str(body.get("external_ref") or "")[:200],
             )
         else:
