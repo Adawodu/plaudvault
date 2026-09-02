@@ -43,10 +43,13 @@ def test_a_clip_never_runs_past_its_turn(tmp_path):
         assert s["start"] >= 10.0 and s["end"] <= 12.0
 
 
-def test_fragments_too_short_to_identify_anyone_are_skipped(tmp_path):
+def test_fragments_too_short_for_a_clean_clip_are_padded_not_dropped(tmp_path):
+    """These used to return nothing, which the console rendered as "no clean sample"
+    next to a voice you could plainly hear on the recording."""
     cfg = _write(tmp_path, [{"start": 0.0, "end": 0.4, "speaker": "A"},
                             {"start": 5.0, "end": 5.3, "speaker": "A"}])
-    assert diarize.samples(cfg, "rec", "A") == []
+    got = diarize.samples(cfg, "rec", "A")
+    assert got and all(g["padded"] for g in got)
 
 
 def test_the_longest_turns_win_but_play_in_time_order(tmp_path):
@@ -96,3 +99,37 @@ def test_naming_a_voice_does_not_un_me_the_person(tmp_path):
 
         st.add_speaker("Bayo", is_me=False)       # explicit, and must be honoured
         assert st.speaker(sid)["is_me"] == 0
+
+
+# ------------------------------------------------- voices that never hold the floor
+
+def test_a_voice_of_only_short_bursts_still_plays(tmp_path):
+    """A real speaker in the archive talks for 109 seconds across 135 turns and never
+    once holds the floor for a second and a half. Refusing to play them reported
+    "no clean sample" about somebody plainly audible on the recording."""
+    turns = [{"start": 100.0 + i * 30, "end": 100.5 + i * 30, "speaker": "A"} for i in range(40)]
+    cfg = _write(tmp_path, turns)
+    got = diarize.samples(cfg, "rec", "A")
+    assert len(got) == 3
+    assert all(g["padded"] for g in got)
+
+
+def test_a_padded_clip_is_wide_enough_to_hear(tmp_path):
+    cfg = _write(tmp_path, [{"start": 500.0, "end": 500.4, "speaker": "A"}])
+    s = diarize.samples(cfg, "rec", "A")[0]
+    assert round(s["end"] - s["start"], 2) == diarize.PADDED_WINDOW_S
+    assert s["start"] < 500.0 < s["end"]      # the burst is inside the window
+
+
+def test_padding_never_seeks_before_the_recording_starts(tmp_path):
+    cfg = _write(tmp_path, [{"start": 0.1, "end": 0.4, "speaker": "A"}])
+    assert diarize.samples(cfg, "rec", "A")[0]["start"] >= 0.0
+
+
+def test_one_long_turn_is_never_padded(tmp_path):
+    """Padding is a fallback, not a default: a clean turn must stay clean, because a
+    padded clip has other people in it."""
+    cfg = _write(tmp_path, [{"start": 10.0, "end": 40.0, "speaker": "A"},
+                            {"start": 50.0, "end": 50.3, "speaker": "A"}])
+    got = diarize.samples(cfg, "rec", "A")
+    assert len(got) == 1 and got[0]["padded"] is False

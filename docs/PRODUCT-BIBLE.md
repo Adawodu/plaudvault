@@ -414,6 +414,20 @@ certain and the first and last second are the likeliest to be somebody else. Cli
 time order rather than longest-first, so a label that is really two people sounds like two
 people.
 
+**A voice too fragmented for a clean clip is padded, not refused.** One speaker in the
+live archive talks for 109 seconds across 135 turns and never once holds the floor for a
+second and a half — every turn is a half-second interjection. The first version returned
+nothing for them and the console said *no clean sample* next to somebody plainly audible.
+When no turn clears the floor, the longest ones are widened to a four-second window and
+flagged `padded`, and the console says *in context* while playing, because you will hear
+whoever they are talking over. A window near either edge of the recording slides inward
+rather than being trimmed: trimming would give the shortest clip to the person whose only
+audible moment is at the end.
+
+**Chips are playable wherever they appear.** Inbox, library, search results. Triage is
+the moment you most want this — deciding what a recording is and who is in it is one
+decision — and it should not require opening the recording first.
+
 **Naming is inline; the dialog keeps the rest.** A queue of 127 unnamed voices is not
 127 dialogs. The common case — a voice you recognise and a name you have already used —
 is now type-and-Enter against a datalist of existing people, which reuses that person
@@ -450,11 +464,11 @@ _Generated 2026-09-02 from git and the live archive._
 | | |
 |---|---|
 | Python modules | 29 |
-| Lines of Python | 8,900 |
-| Commits | 22 |
+| Lines of Python | 8,921 |
+| Commits | 23 |
 | CLI verbs | 27 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `browse`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `cli.py` (921), `store.py` (853), `web.py` (844), `story.py` (804), `diarize.py` (515), `mcp_server.py` (416).
+Largest modules: `cli.py` (921), `store.py` (853), `web.py` (844), `story.py` (804), `diarize.py` (536), `mcp_server.py` (416).
 
 ### Live archive
 
@@ -482,6 +496,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-09-02 | Play the voice that only ever interjects, and play it from the inbox |
 | 2026-09-02 | Hear a voice before you name it, and name it without opening a dialog |
 | 2026-09-02 | Copy a transcript in one click, and give the archive names a person can read |
 | 2026-09-02 | Count summarized against what is eligible, and show the title you already have |

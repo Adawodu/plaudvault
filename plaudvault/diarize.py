@@ -477,6 +477,8 @@ def rematch(cfg: Config, store: Store, *, threshold: float | None = None) -> dic
 # afternoon. Below MIN a clip is usually a "yeah" and identifies nobody.
 SAMPLE_MAX_S = 8.0
 SAMPLE_MIN_S = 1.5
+# What a half-second interjection is widened to, so there is something to listen to.
+PADDED_WINDOW_S = 4.0
 
 
 def samples(cfg: Config, rec_id: str, label: str, *, n: int = 3) -> list[dict]:
@@ -498,18 +500,37 @@ def samples(cfg: Config, rec_id: str, label: str, *, n: int = 3) -> list[dict]:
         return []
     turns = json.loads(path.read_text()).get("turns") or []
 
-    mine = [t for t in turns if t.get("speaker") == label
-            and (t.get("end", 0) - t.get("start", 0)) >= SAMPLE_MIN_S]
+    mine = [t for t in turns if t.get("speaker") == label]
+    if not mine:
+        return []
     mine.sort(key=lambda t: t["end"] - t["start"], reverse=True)
+    duration = max((t.get("end", 0) for t in turns), default=0)
+
+    clean = [t for t in mine if (t["end"] - t["start"]) >= SAMPLE_MIN_S]
+
+    # A voice can talk for two minutes and never hold the floor for one and a half
+    # seconds — 135 interjections of half a second each is a real person, and refusing
+    # to play them told you "no clean sample" about somebody plainly audible. When
+    # nothing is long enough on its own, the longest turns are still the best evidence
+    # there is; they are widened into a window so you hear the blip in context. You
+    # will hear whoever they are talking over, which is why they are flagged.
+    padded = not clean
+    picks = (clean or mine)[:n]
 
     out = []
-    for t in mine[:n]:
+    for t in picks:
         span = t["end"] - t["start"]
-        take = min(span, SAMPLE_MAX_S)
+        take = min(span, SAMPLE_MAX_S) if not padded else PADDED_WINDOW_S
         mid = t["start"] + span / 2
-        start = max(t["start"], mid - take / 2)
-        out.append({"start": round(start, 2),
-                    "end": round(min(t["end"], start + take), 2),
-                    "turn_seconds": round(span, 1)})
+        start = mid - take / 2
+        # A window near either edge is slid inward, not trimmed. Trimming it would make
+        # the clip for somebody whose only audible moment is in the last few seconds the
+        # shortest and least useful one, which is backwards.
+        if duration and start + take > duration:
+            start = duration - take
+        start = max(0.0, start)
+        end = start + take if not duration else min(duration, start + take)
+        out.append({"start": round(start, 2), "end": round(end, 2),
+                    "turn_seconds": round(span, 1), "padded": padded})
     out.sort(key=lambda s: s["start"])
     return out

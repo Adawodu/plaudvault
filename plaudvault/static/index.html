@@ -30,6 +30,9 @@ main{padding:24px 28px 80px;max-width:1180px;margin:0 auto}
 .inline-name:focus{border-color:var(--accent);background:var(--panel-2);outline:none}
 .inline-name::placeholder{color:var(--faint);font-style:italic}
 .inline-name:disabled{opacity:.5}
+.chip-play{cursor:pointer;user-select:none}
+.chip-play:hover{border-color:var(--accent);opacity:1}
+.chip-play.playing{border-color:var(--accent);color:var(--accent);opacity:1}
 
 .banner{background:var(--destructive-soft);color:var(--destructive);border:1px solid var(--destructive);padding:12px 16px;border-radius:8px;margin-bottom:20px}
 .muted{color:var(--muted-foreground)}
@@ -722,7 +725,7 @@ function recCard(r, showTier){
         <div><h3>${esc(r.display)}</h3>
         <div class="faint">${r.started_iso} · ${r.duration_min} min${
           r.display !== r.filename ? ' · <span class="mono">'+esc(r.filename)+'</span>' : ''}</div>
-        ${speakerChips(r.speakers)}</div>
+        ${speakerChips(r.speakers, r.id)}</div>
       </div>
       <div class="row">${showTier?tier:''}${prune}${tone}${acts}${open}
         <button class="btn sm" onclick="openRec('${r.id}')">Open</button>
@@ -1297,25 +1300,36 @@ let SAMPLE_AUDIO = null;     // one element for the whole page: two voices at on
 function stopSample(){
   if (SAMPLE_AUDIO){ SAMPLE_AUDIO.pause(); SAMPLE_AUDIO.onT = null; }
   document.querySelectorAll('[data-sample-btn]').forEach(b => {
-    b.textContent = b.dataset.idle || 'listen'; b.classList.remove('primary');
+    b.textContent = b.dataset.idle || 'listen';
+    b.classList.remove('primary', 'playing');
   });
 }
 
 async function playSample(btn, recId, label){
   const key = recId + '/' + label;
-  if (btn.classList.contains('primary')) return stopSample();   // pressing it again stops
+  // Pressing the thing that is playing stops it.
+  if (btn.classList.contains('primary') || btn.classList.contains('playing')) return stopSample();
   stopSample();
 
   if (!SAMPLES[key]){
     btn.textContent = '…';
     try {
       SAMPLES[key] = (await api(`/api/recordings/${recId}/speakers/${encodeURIComponent(label)}/samples`)).samples;
-    } catch(e){ SAMPLES[key] = []; }
+    } catch(e){
+      // Never cached, and never reported as "nothing to play": a request that failed
+      // and a voice with no audio are different facts, and showing the second when the
+      // first happened sends you looking for a problem in the archive.
+      btn.textContent = 'could not load';
+      setTimeout(()=>{ btn.textContent = btn.dataset.idle || 'listen'; }, 2200);
+      return;
+    }
   }
   const clips = SAMPLES[key];
   if (!clips.length){
-    btn.textContent = 'no clean sample';
-    setTimeout(()=>{ btn.textContent = btn.dataset.idle || 'listen'; }, 2200);
+    // Reachable only when the recording was never diarized, now that a voice too
+    // fragmented for a clean clip gets a padded one instead.
+    btn.textContent = 'not split by speaker';
+    setTimeout(()=>{ btn.textContent = btn.dataset.idle || 'listen'; }, 2600);
     return;
   }
 
@@ -1333,8 +1347,16 @@ async function playSample(btn, recId, label){
   const play = () => {
     if (i >= clips.length) return stopSample();
     const c = clips[i];
-    btn.textContent = `■ ${i + 1} of ${clips.length}`;
-    btn.classList.add('primary');
+    // A padded clip is mostly somebody else. Saying so is the difference between
+    // "that is not them" and "I cannot tell which one they are".
+    btn.textContent = c.padded ? `■ ${i + 1}/${clips.length} in context`
+                               : `■ ${i + 1} of ${clips.length}`;
+    btn.title = c.padded
+      ? `This voice only ever speaks in bursts under ${1.5}s, so you are hearing `
+        + `${c.turn_seconds}s of them inside a ${Math.round(c.end - c.start)}s window — `
+        + `other people are audible too.`
+      : `${Math.round(c.end - c.start)}s from a ${c.turn_seconds}s turn`;
+    btn.classList.add(btn.dataset.idleChip ? 'playing' : 'primary');
     SAMPLE_AUDIO.currentTime = c.start;
     // Chained rather than concatenated: each clip is a separate moment in the
     // conversation, and hearing the seam is the point — a label that is really two
@@ -1395,16 +1417,25 @@ async function saveInlineName(el, recId, label){
 }
 
 // ---------------------------------------------------------------- speakers
-function speakerChips(list){
+// Chips are playable wherever they appear — inbox, library, search results. Triage is
+// the moment you actually want this: deciding what a recording is and who is in it is
+// one decision, and it should not need opening the recording to hear a voice.
+function speakerChips(list, recId){
   if (!list || !list.length) return '';
+  const hear = recId ? ' \u25b8' : '';
+  const play = lbl => recId
+    ? ` data-sample-btn data-idle-chip="1" onclick="event.stopPropagation();playSample(this,'${recId}','${esc(lbl)}')"`
+    : '';
   return `<div class="row" style="gap:5px;margin-top:6px">` + list.map(sp => {
-    if (!sp.name) return `<span class="chip" title="unnamed voice, ${sp.minutes} min"
-      style="opacity:.65">${esc(sp.label)}</span>`;
+    if (!sp.name) return `<span class="chip chip-play" style="opacity:.75"
+      title="Unnamed voice, ${sp.minutes} min\u2009\u2014 click to hear them"${play(sp.label)}
+      data-idle="${esc(sp.label)}${hear}">${esc(sp.label)}${hear}</span>`;
     // A machine match is drawn as a guess, deliberately: an automatic attribution that
     // looks identical to one you confirmed is how a wrong identity becomes invisible.
-    return `<span class="chip ${sp.is_me?'gold':''}"
-      title="${sp.source==='voiceprint'?'matched by voiceprint at '+(sp.confidence||0).toFixed(2)+' — a guess':'you confirmed this'} · ${sp.minutes} min"
-      >${esc(sp.name)}${sp.source==='voiceprint'?' ?':''}</span>`;
+    const mark = sp.source==='voiceprint' ? ' ?' : '';
+    return `<span class="chip chip-play ${sp.is_me?'gold':''}"
+      title="${sp.source==='voiceprint'?'Matched by voiceprint at '+(sp.confidence||0).toFixed(2)+' \u2014 a guess':'You confirmed this'} \u00b7 ${sp.minutes} min \u2014 click to hear them"${play(sp.label)}
+      data-idle="${esc(sp.name)}${mark}${hear}">${esc(sp.name)}${mark}${hear}</span>`;
   }).join('') + `</div>`;
 }
 
