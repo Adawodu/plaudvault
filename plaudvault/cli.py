@@ -484,7 +484,7 @@ def cmd_search(args, cfg) -> int:
         print("  no matches." if n else "  nothing indexed yet — run: plaudctl index")
         return 0
     for h in hits:
-        print(f"\n  {h['score']:.3f}  {h['started_iso']}  {h['filename'][:52]}  [{h['at']}]")
+        print(f"\n  {h['score']:.3f}  {h['started_iso']}  {h['label'][:52]}  [{h['at']}]")
         body = " ".join(h["text"].split())
         print(f"        {body[:200]}{'…' if len(body) > 200 else ''}")
     print("\n  scores are cosine similarity, not confidence — compare them to each other")
@@ -627,7 +627,7 @@ def _run_stages(args, cfg) -> int:
 
 def cmd_status(args, cfg) -> int:
     with Store(cfg.db_path) as store:
-        c = store.counts()
+        c = store.counts(cfg.summarize_min_seconds)
         rows = store.all()
     from . import llm as _llm
 
@@ -651,7 +651,8 @@ def cmd_status(args, cfg) -> int:
     print(f"    download verified:{c['verified']}   (complete, not truncated)")
     print(f"    byte-identical:   {c['md5_exact']}   (matches Plaud's md5; rest carry an ID3 tag)")
     print(f"    transcribed:      {c['transcribed']}")
-    print(f"    summarized:       {c['summarized']}")
+    print(f"    summarized:       {c['summarized']} of {c['summarizable']} "
+          f"over {cfg.summarize_min_seconds}s (shorter ones get a title instead)")
     print(f"    tone scored:      {c['scored']}")
     print(f"    noted in vault:   {c['noted']}")
     print(f"    pruned from cloud:{c['pruned']}")

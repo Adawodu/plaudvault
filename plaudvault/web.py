@@ -721,7 +721,7 @@ def status():
            "archive_root": str(cfg.archive_root), "vault": str(cfg.notes_dir)}
     if available:
         with _store(cfg) as store:
-            out["counts"] = store.counts()
+            out["counts"] = store.counts(cfg.summarize_min_seconds)
             out["prune_unlocked"] = (cfg.archive_root / "prune-probe-receipt.json").exists()
     return out
 

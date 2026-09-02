@@ -214,6 +214,10 @@ def search(
             {
                 "recording_id": r["recording_id"],
                 "filename": r["filename"],
+                # A title if the titler produced one, the filename otherwise. Newer
+                # recordings are named for their timestamp, so showing the filename
+                # hid a perfectly good title behind "2026-08-31 12:02:13".
+                "label": r["title"] or r["filename"],
                 "started_at": r["started_at"],
                 "started_iso": time.strftime("%Y-%m-%d %H:%M", time.localtime(r["started_at"])),
                 "tier": r["tier"],

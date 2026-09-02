@@ -380,31 +380,31 @@ a mid-corpus change puts a seam in the trend that looks like a mood shift and is
 ## 5. Status
 
 <!-- BEGIN:STATUS (generated — do not edit by hand) -->
-_Generated 2026-08-31 from git and the live archive._
+_Generated 2026-09-02 from git and the live archive._
 
 ### Codebase
 
 | | |
 |---|---|
 | Python modules | 28 |
-| Lines of Python | 8,687 |
-| Commits | 19 |
+| Lines of Python | 8,698 |
+| Commits | 20 |
 | CLI verbs | 26 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `cli.py` (904), `store.py` (838), `web.py` (831), `story.py` (804), `diarize.py` (471), `mcp_server.py` (416).
+Largest modules: `cli.py` (905), `store.py` (844), `web.py` (831), `story.py` (804), `diarize.py` (471), `mcp_server.py` (416).
 
 ### Live archive
 
 | | |
 |---|---|
-| Recordings | 57 |
-| Transcribed | 57 |
-| Tone scored | 56 |
-| Indexed chunks | 1,258 |
+| Recordings | 62 |
+| Transcribed | 61 |
+| Tone scored | 60 |
+| Indexed chunks | 1,506 |
 | Triaged | 57 |
-| Open commitments | 0 |
-| Action events | 1,152 |
-| Audio captured | 36.2 hours |
+| Open commitments | 74 |
+| Action events | 1,228 |
+| Audio captured | 42.1 hours |
 | Tiers | exclude 3 · local 1 · stack 53 |
 
 <!-- END:STATUS -->
@@ -419,6 +419,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-09-02 | Count summarized against what is eligible, and show the title you already have |
 | 2026-08-31 | Refuse generated queries that are the prompt's own examples |
 | 2026-08-31 | Report one unnamed-voice count, not two |
 | 2026-08-31 | Measure retrieval instead of asserting it, and sketch the pipeline under Dagster |
@@ -450,9 +451,10 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 
 | # | Item | Why |
 |---|---|---|
-| B3 | **Retrieval evaluation harness** | Everything rests on retrieval quality nobody has measured properly — and now an MCP client answers questions from it, so the stakes went up. A labelled query set, measured rank, run on every change. Also settles the open prefix question (D-open-1). |
+| B14 | **A verified golden set** | B3 built the instrument; every one of its 48 queries is still `verified: false`, because each was written *from* the recording it is scored against. That measures a strictly easier task than the real one, so the harness currently has no number anybody is allowed to quote. Queries written from memory, before looking, are the fix. Blocks B4, B5 and D-open-1, all of which are comparisons against a baseline. |
 | B4 | **Neighbour expansion for answer context** | Chunks are 1200 chars, tuned for search snippets. An MCP client answering a question wants the hit plus its neighbours; `get_transcript` with a time window is the manual version of this. |
 | B5 | **Date/tier filters ahead of vector search** | "What did I commit to last week" is a metadata question. Similarity alone cannot answer it. |
+| B15 | **Split a recording at conversation boundaries** | A pin left running produces one file holding several unrelated conversations. Title, summary, tone and tier are all per-recording and all wrong for such a file, and its chunk count lets it dominate retrieval. Diarization already knows where the voices change; a gap plus a speaker-set change is most of a boundary detector. |
 
 ### Later — valuable, design not settled
 
@@ -482,10 +484,16 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 
 ## 8. Roadmap
 
-**Now — trustworthy recall.** B3, urgently. An MCP client is now answering questions out
-of this index, which means unmeasured retrieval quality has stopped being a private
-problem: a system that sounds authoritative and is wrong is exactly what a cited answer
-built on a bad hit looks like. Then B4.
+**Now — a number worth quoting.** B3 shipped, and the first full-corpus run put oblique
+recall@1 at 0.55: ask the archive for the gist of something in words it did not use, and
+it finds the right recording about half the time. That is the honest state of retrieval,
+and an MCP client is writing confident prose over it.
+
+But the score is provisional in a way that matters more than its value. All 48 queries
+were generated from the recordings they are scored against, so the harness is measuring
+an easier task than the real one and every query is flagged `verified: false`. B14 first —
+without it, B4 and B5 are improvements measured against a baseline that does not hold.
+Then B4.
 
 **Next — make the identity layer earn its cost.** Diarization is built but starts empty,
 and its value is entirely in what gets named. The first real test is whether naming
@@ -548,6 +556,13 @@ Stated plainly because each one is a way this product can mislead you.
 - **A title is a summary of a summary.** It inherits every weakness of the summary it was
   written from, compressed further. It is a way to find a recording, not a description of
   one.
+- **A long recording is not one conversation, and everything downstream assumes it is.**
+  The 2.9-hour file titled "Metric Health SOC2 Compliance Audit" also contains a job
+  interview and two unrelated introductions. One title, one summary and one tone score are
+  stretched over all of it, and its 139 chunks — seven times the median — put it at or near
+  the top of almost every search regardless of the question. The per-recording cap of 3
+  keeps it from owning a whole page but does not stop it owning the first row. Splitting a
+  recording at conversation boundaries is the fix and is not built (B15).
 - **An agent's report is unverified.** plaudvault records what the agent said it did. It
   has no way to check, which is why the action stays open until you close it.
 - **Tone scores are estimates over ASR.** A transcript has no tone of voice, so sarcasm,
@@ -557,6 +572,11 @@ Stated plainly because each one is a way this product can mislead you.
   to check recordings, not a task list.
 - **Extraction is non-deterministic.** Two runs over the same transcript returned
   different commitments. Re-running `--force` gives a different board.
+- **Oblique retrieval is roughly a coin flip.** Measured 2026-08-31 over 48 generated
+  queries: naming a person, company or number finds the right recording first 79% of the
+  time; describing the same thing in words the recording did not use, 55%. The second
+  number is the one that matters, because it is the case semantic search exists for. Both
+  are provisional until B14 — the queries were written from the recordings they score.
 - **Search scores are cosine similarity, not confidence.** Unrelated English sits around
   0.3–0.5; a top hit at 0.55 may still be the best the archive has. Quality falls off
   after the first few hits.
@@ -577,7 +597,8 @@ Stated plainly because each one is a way this product can mislead you.
 
 | # | Question | Status |
 |---|---|---|
-| D-open-1 | Do `search_query:`/`search_document:` prefixes actually help retrieval here? | A 4-query eval was inconclusive — better mean rank (13 vs 15), worse top-3 (2/4 vs 3/4). Kept because they are the model's documented usage and Ollama's template (`{{ .Prompt }}`) confirms it does not add them itself. Needs B3. |
+| D-open-1 | Do `search_query:`/`search_document:` prefixes actually help retrieval here? | A 4-query eval was inconclusive — better mean rank (13 vs 15), worse top-3 (2/4 vs 3/4). Kept because they are the model's documented usage and Ollama's template (`{{ .Prompt }}`) confirms it does not add them itself. B3 built the instrument to settle this; it needs B14 before an A/B means anything. |
+| D-open-4 | Is 0.55 oblique recall@1 a retrieval problem or an embedding-model problem? | `nomic-embed-text` is the only embedder ever tried. Chunking, prefixes and the model are three knobs and the harness cannot yet tell them apart. |
 | D-open-2 | Should the Actions board stay a task list? | Depends on B8. |
 | D-open-3 | Is a 1200-char chunk right for both search snippets and answer context? | Probably not. See B4. |
 

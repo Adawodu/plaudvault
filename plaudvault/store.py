@@ -323,8 +323,13 @@ class Store:
             (cutoff,),
         ).fetchall()
 
-    def counts(self) -> dict[str, int]:
+    def counts(self, summarize_min_seconds: int = 0) -> dict[str, int]:
+        """Pipeline progress. `summarize_min_seconds` must be the configured floor:
+        recordings shorter than it are never summarized (they get a title instead),
+        so counting them against the total reports a shortfall that no amount of
+        running the pipeline will close."""
         q = lambda w: self.db.execute(f"SELECT COUNT(*) FROM recordings WHERE {w}").fetchone()[0]  # noqa: E731
+        eligible = f"transcript_path IS NOT NULL AND duration_s >= {int(summarize_min_seconds)}"
         return {
             "total": self.db.execute("SELECT COUNT(*) FROM recordings").fetchone()[0],
             "downloaded": q("audio_sha256 IS NOT NULL"),
@@ -332,6 +337,7 @@ class Store:
             "md5_exact": q("md5_verified = 1"),
             "transcribed": q("transcript_path IS NOT NULL"),
             "summarized": q("summary_path IS NOT NULL"),
+            "summarizable": q(eligible),
             "scored": self.db.execute("SELECT COUNT(*) FROM sentiment").fetchone()[0],
             "noted": q("note_path IS NOT NULL"),
             "pruned": q("pruned_at IS NOT NULL"),
@@ -486,7 +492,7 @@ class Store:
 
     def chunks(self, *, model: str, include_excluded: bool = False) -> list[sqlite3.Row]:
         q = (
-            "SELECT c.recording_id, c.start_ms, c.text, c.vector, r.filename, r.started_at,"
+            "SELECT c.recording_id, c.start_ms, c.text, c.vector, r.filename, r.title, r.started_at,"
             " t.tier FROM chunks c JOIN recordings r ON r.id = c.recording_id "
             "LEFT JOIN triage t ON t.recording_id = c.recording_id WHERE c.model = ? "
         )
