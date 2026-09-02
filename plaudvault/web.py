@@ -18,7 +18,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import (auth, diarize, dispatch, freshness, llm, metrics, runlock, search,
+from . import (auth, browse, diarize, dispatch, freshness, llm, metrics, runlock, search,
                story, tiering, titles, transcribe)
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
@@ -790,6 +790,7 @@ def settings():
         "archive_root": str(cfg.archive_root),
         "notes_dir": str(cfg.notes_dir) if cfg.notes_dir else None,
         "stack_dir": str(tiering.stack_dir(cfg)),
+        "browse_dir": str(browse.browse_dir(cfg)),
         "email": cfg.email,
         "api_base": cfg.api_base,
         "transcribe": {"backend": cfg.resolved_transcribe_backend, "ok": tr_ok, "detail": tr_why},

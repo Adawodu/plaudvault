@@ -546,6 +546,7 @@ plaudctl fresh        is the vault up to date? (--cloud also asks Plaud)
 plaudctl sentiment    score tone for anything not yet scored
 plaudctl status       what is archived and what is pending
 plaudctl verify       re-hash the archive, catch bitrot or missing files
+plaudctl browse       rebuild PLAUD/by-name/ — the archive under readable names
 plaudctl web          this console
 plaudctl service install    run automatically in the background
 plaudctl init         reconfigure storage, transcription, or model</pre></div>
@@ -907,6 +908,30 @@ function toast(msg){
   setTimeout(() => el.remove(), 2600);
 }
 
+// Copy the transcript as text, not as the rendered HTML: the page turns every
+// [hh:mm:ss] into a seek link, and pasting those into a document brings the markup
+// with it. Timestamps are worth keeping when you are citing a moment and pure noise
+// when you are quoting a sentence, so both are one click.
+async function copyTranscript(strip){
+  let text = (CUR && CUR.transcript) || '';
+  if (!text) return toast('nothing to copy');
+  if (strip) text = text.replace(/\[\d{2}:\d{2}:\d{2}\]\s*/g, '');
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    // Clipboard API needs a secure context. Loopback counts, but a browser with the
+    // permission denied lands here, and failing silently would look like it worked.
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    if (!ok) return toast('could not reach the clipboard');
+  }
+  const words = text.split(/\s+/).filter(Boolean).length;
+  toast(`transcript copied — ${words.toLocaleString()} words${strip ? ', no timestamps' : ''}`);
+}
+
 // ---------------------------------------------------------------- navigation
 // Prev/next follow the list you arrived from, not a global ordering: stepping through
 // the Inbox should visit untriaged recordings, and stepping through search results
@@ -1017,7 +1042,9 @@ async function openRec(id, atMs){
         <h2>Actions <button class="btn sm" onclick="addAction()">+ add</button></h2>
         <div id="recActions"></div>
       </div>
-      <div><h2>Transcript</h2><div class="transcript" id="tr">${tr}</div></div>
+      <div><h2>Transcript <button class="btn sm" onclick="copyTranscript()">copy</button>
+        <button class="btn sm" onclick="copyTranscript(true)">copy without timestamps</button></h2>
+        <div class="transcript" id="tr">${tr}</div></div>
     </div>`;
   renderRecActions();
   renderRecNav(id);
@@ -1774,6 +1801,10 @@ async function loadSettings(){
   $('#settings').innerHTML = `<div class="card"><table>
     <tr><td>Archive</td><td class="mono">${esc(s.archive_root)}</td></tr>
     <tr><td>Cognitive stack corpus</td><td class="mono">${esc(s.stack_dir)}</td></tr>
+    <tr><td>Browse by name</td><td class="mono">${esc(s.browse_dir)}
+      <div class="faint" style="font-family:var(--font-sans);margin-top:3px">Every recording under
+        a readable name — date, length, title — as links into the archive. Open this one in Finder;
+        the directories above are named by recording id and are not meant to be read by a person.</div></td></tr>
     <tr><td>Notes</td><td class="mono">${s.notes_dir?esc(s.notes_dir):'<span class="faint">not configured</span>'}</td></tr>
     <tr><td>Plaud account</td><td class="mono">${esc(s.email||'not logged in')}</td></tr>
     <tr><td>Transcription</td><td>${yn(s.transcribe.ok, s.transcribe.detail)}</td></tr>

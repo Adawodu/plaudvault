@@ -65,7 +65,7 @@ visible rather than hiding it behind a confident interface.
 `plaudctl run` executes six stages under a single advisory lock:
 
 ```
-sync → transcribe → diarize → summarize → title → sentiment → notes → extract → index → tier
+sync → transcribe → diarize → summarize → title → sentiment → notes → extract → index → tier → browse
 ```
 
 | Stage | Engine | Produces |
@@ -80,6 +80,7 @@ sync → transcribe → diarize → summarize → title → sentiment → notes 
 | `extract` | qwen3:8b via Ollama | `actions` rows (proposed) |
 | `index` | nomic-embed-text via Ollama | `chunks` rows + vectors |
 | `tier` | — | reconciles `stack/` with triage |
+| `browse` | — | reconciles `by-name/` — readable links over the hash-named archive |
 
 ### Data model
 
@@ -363,6 +364,36 @@ things keep that from being a quiet widening of the archive's blast radius:
 Tier is still enforced in exactly one place. What changed is the default, and it is
 recorded here because the reasoning is the sort that gets re-litigated.
 
+### D24 — The archive is browsable through links, and is never renamed
+Every file on disk is named for its Plaud recording id, which is correct and unreadable:
+opening the archive in Finder shows sixty identical hashes. The obvious fix — name the
+file after its title — is the wrong one, for three reasons that compound.
+
+A title is a *proposal*. `plaudctl title` rewrites it whenever the model is re-run, and
+you can rewrite it by hand. Naming the file after it means the audio moves every time a
+guess changes. That audio is the one artifact in the system that cannot be regenerated,
+and every stored path, Obsidian note link and Finder alias pointing at it breaks on each
+move. Five recordings currently have no title at all, so the scheme cannot even be
+applied uniformly. And the id is the join key for the entire pipeline; making a mutable,
+model-authored string load-bearing for file identity inverts which of the two is stable.
+
+So `PLAUD/by-name/` is a *view*: symlinks named `2026-08-31 1202 · 174m · Metric Health
+SOC2 Compliance Audit.mp3`, grouped by artifact kind, rebuilt at the end of every run
+once the titler has settled. Date first so it sorts the way you look; duration next
+because it separates a voice memo from a real conversation at a glance. The tree is
+disposable — delete it, rebuild it, nothing is lost — and reconciliation removes stale
+links exactly as `tiering.py` removes stale copies, so untiering a recording takes it out
+of the browsable directory too.
+
+**Links here, copies in `stack/` — the opposite of D-tiering, for the opposite reason.**
+`stack/` is read by an indexer that may or may not follow symlinks, and a link followed
+into the full corpus is a privacy failure. Nothing reads `by-name/`; a person does. The
+risk runs the other way, so the answer does too.
+
+Reconciliation only ever unlinks *symlinks*. A real file that somehow lands in the tree
+is left alone, because this runs unattended over an external drive and losing a file to a
+tidy-up must not be a reachable outcome.
+
 ### D14 — qwen3:8b, not the largest model available
 `qwen3.8` (27.3B, Q4_K_M, 17.7 GB) was pulled and **cannot load** on a 24 GB machine:
 5m04s of thrashing, swap climbing, then `timed out waiting for llama-server to start`,
@@ -386,12 +417,12 @@ _Generated 2026-09-02 from git and the live archive._
 
 | | |
 |---|---|
-| Python modules | 28 |
-| Lines of Python | 8,698 |
-| Commits | 20 |
-| CLI verbs | 26 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
+| Python modules | 29 |
+| Lines of Python | 8,835 |
+| Commits | 21 |
+| CLI verbs | 27 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `browse`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `cli.py` (905), `store.py` (844), `web.py` (831), `story.py` (804), `diarize.py` (471), `mcp_server.py` (416).
+Largest modules: `cli.py` (921), `store.py` (844), `web.py` (832), `story.py` (804), `diarize.py` (471), `mcp_server.py` (416).
 
 ### Live archive
 
@@ -419,6 +450,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-09-02 | Copy a transcript in one click, and give the archive names a person can read |
 | 2026-09-02 | Count summarized against what is eligible, and show the title you already have |
 | 2026-08-31 | Refuse generated queries that are the prompt's own examples |
 | 2026-08-31 | Report one unnamed-voice count, not two |

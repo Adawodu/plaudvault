@@ -10,6 +10,7 @@ from pathlib import Path
 from . import (auth, diarize, dispatch, evaluate, extract, freshness, notes,
                prune, runlock, search, sentiment, service, setup_wizard, story,
                summarize, sync, tiering, titles, transcribe)
+from . import browse
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -548,6 +549,16 @@ def cmd_tier(args, cfg) -> int:
     return 0
 
 
+def cmd_browse(args, cfg) -> int:
+    """Rebuild the human-readable link tree, and say where it is."""
+    with Store(cfg.db_path) as store:
+        s = browse.rebuild(cfg, store)
+    print(f"  {browse.browse_dir(cfg)}")
+    print(f"  {s['links']} links over {s['recordings']} recordings "
+          f"(+{s['created']} new, {s['replaced']} repointed, -{s['removed']} stale)")
+    return 0
+
+
 def cmd_init(args, cfg) -> int:
     return setup_wizard.run()
 
@@ -622,6 +633,9 @@ def _run_stages(args, cfg) -> int:
         print(f"  [skip] {exc}")
     print("\n== tier sync ==")
     rc |= cmd_tier(args, cfg)
+    # Last, because it names files after the title, and the titler ran this same pass.
+    print("\n== browse ==")
+    rc |= cmd_browse(args, cfg)
     return rc
 
 
@@ -861,6 +875,8 @@ def main(argv=None) -> int:
     sp.add_argument("--kinds", help="direct, oblique, or both (default both)")
 
     add("tier", cmd_tier, "reconcile PLAUD/stack/ with your triage decisions")
+
+    add("browse", cmd_browse, "rebuild PLAUD/by-name/ — the archive under readable names")
 
     sp = add("web", cmd_web, "open the console (triage, actions, measures)")
     sp.add_argument("--port", type=int, default=None)
