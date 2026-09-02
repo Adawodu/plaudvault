@@ -464,11 +464,11 @@ _Generated 2026-09-02 from git and the live archive._
 | | |
 |---|---|
 | Python modules | 29 |
-| Lines of Python | 8,921 |
-| Commits | 23 |
+| Lines of Python | 8,964 |
+| Commits | 24 |
 | CLI verbs | 27 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `browse`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `cli.py` (921), `store.py` (853), `web.py` (844), `story.py` (804), `diarize.py` (536), `mcp_server.py` (416).
+Largest modules: `cli.py` (923), `web.py` (860), `store.py` (853), `story.py` (804), `diarize.py` (536), `mcp_server.py` (416).
 
 ### Live archive
 
@@ -496,6 +496,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-09-02 | Tell me when the console is running code older than the files on disk |
 | 2026-09-02 | Play the voice that only ever interjects, and play it from the inbox |
 | 2026-09-02 | Hear a voice before you name it, and name it without opening a dialog |
 | 2026-09-02 | Copy a transcript in one click, and give the archive names a person can read |
@@ -666,6 +667,12 @@ Stated plainly because each one is a way this product can mislead you.
   `meta/<id>.json` so you have both.
 - **Plaud transcodes asynchronously.** A recording synced minutes after upload may arrive
   as the raw device blob. Detected, kept, retried next run.
+- **The console can serve a newer page than its own code.** `index.html` is read from
+  disk on every request; the Python is imported once, at start. A console left running
+  across an edit therefore serves the new page against the old endpoints, and the symptom
+  is a feature that 404s — which reads as a broken feature, not a stale process. This cost
+  a real debugging session. `/api/status` now reports `stale_code` and the console says so
+  in a banner; `plaudctl service restart` is the fix.
 - **Everything depends on one external volume.** Archive *and* models live on it. It
   unmounted once during development: the failure is graceful and self-recovering, but a
   scheduled run with the drive detached is a silent no-op (B10).

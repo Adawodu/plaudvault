@@ -255,6 +255,31 @@ def uninstall() -> int:
     return 2
 
 
+def restart() -> int:
+    """Bounce the console so it picks up new code.
+
+    The console is a long-lived process and its Python is imported once, but it reads
+    `index.html` from disk on every request. So editing the code leaves a console
+    serving today's page against last week's endpoints — which does not look like a
+    stale server, it looks like a broken feature. This is the fix, and `/api/status`
+    reports the condition so you are told rather than having to suspect it.
+    """
+    if sys.platform == "darwin":
+        ok, out = _launchctl("kickstart", "-k", f"gui/{os.getuid()}/{LABEL_WEB}")
+        if ok:
+            print(f"  {LABEL_WEB} restarted")
+            return 0
+        print(f"  could not restart: {out.strip() or 'is it installed?'}")
+        return 1
+    if sys.platform.startswith("linux"):
+        r = subprocess.run(["systemctl", "--user", "restart", "plaudvault-console.service"],
+                           capture_output=True, text=True)
+        print("  restarted" if r.returncode == 0 else f"  {(r.stderr or '').strip()}")
+        return r.returncode
+    print(f"  no managed service on {sys.platform} — stop `plaudctl web` and start it again")
+    return 2
+
+
 def status() -> int:
     if sys.platform == "darwin":
         for label in (LABEL_WEB, LABEL_SYNC):

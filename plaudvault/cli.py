@@ -569,6 +569,8 @@ def cmd_service(args, cfg) -> int:
         return service.install(hours)
     if args.action == "uninstall":
         return service.uninstall()
+    if args.action == "restart":
+        return service.restart()
     return service.status()
 
 
@@ -883,9 +885,9 @@ def main(argv=None) -> int:
 
     add("init", cmd_init, "interactive first-time setup")
 
-    sp = add("service", cmd_service, "install/remove the background services")
+    sp = add("service", cmd_service, "install/remove/restart the background services")
     sp.add_argument("action", nargs="?", default="status",
-                    choices=["install", "uninstall", "status"])
+                    choices=["install", "uninstall", "status", "restart"])
     sp.add_argument("--hours", help="comma-separated sync hours, e.g. 7,12,18,22")
 
     sp = add("run", cmd_run,

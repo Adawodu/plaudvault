@@ -720,6 +720,21 @@ def vault_freshness(cloud: bool = False):
     return report
 
 
+# When this process imported its code. Compared against what is on disk, because a
+# console that has been running since before an edit serves the new page against the old
+# endpoints — and a 404 from a route that exists in the file in front of you does not
+# look like a stale server, it looks like a broken feature. Ninety minutes were spent
+# finding that once; the console says it now.
+_IMPORTED_AT = time.time()
+
+
+def _code_changed_since_start() -> bool:
+    pkg = Path(__file__).parent
+    newest = max((p.stat().st_mtime for p in pkg.rglob("*.py")
+                  if "__pycache__" not in p.parts), default=0)
+    return newest > _IMPORTED_AT
+
+
 @app.get("/api/status")
 def status():
     cfg = load()
@@ -730,7 +745,8 @@ def status():
     except ArchiveUnavailable as exc:
         available, detail = False, str(exc)
     out = {"archive_available": available, "detail": detail,
-           "archive_root": str(cfg.archive_root), "vault": str(cfg.notes_dir)}
+           "archive_root": str(cfg.archive_root), "vault": str(cfg.notes_dir),
+           "stale_code": _code_changed_since_start()}
     if available:
         with _store(cfg) as store:
             out["counts"] = store.counts(cfg.summarize_min_seconds)

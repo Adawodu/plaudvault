@@ -562,6 +562,7 @@ plaudctl sentiment    score tone for anything not yet scored
 plaudctl status       what is archived and what is pending
 plaudctl verify       re-hash the archive, catch bitrot or missing files
 plaudctl browse       rebuild PLAUD/by-name/ — the archive under readable names
+plaudctl service restart   bounce the console after a code change
 plaudctl web          this console
 plaudctl service install    run automatically in the background
 plaudctl init         reconfigure storage, transcription, or model</pre></div>
@@ -618,6 +619,15 @@ async function boot(){
     if (!s.archive_available) {
       $('#banner').innerHTML = `<div class="banner"><b>Archive unavailable.</b> ${esc(s.detail)}</div>`;
       return;
+    }
+    // The page is read from disk on every request; the Python is not. So this page can
+    // be newer than the process serving it, and the symptom is a feature that 404s
+    // rather than anything that looks like a stale server.
+    if (s.stale_code){
+      $('#banner').innerHTML = `<div class="banner"><b>This console is running older code
+        than what is on disk.</b> The page you are looking at is current, but its endpoints
+        are not — a new feature will fail as though it were broken. Restart it with
+        <span class="mono">plaudctl service restart</span>, then reload.</div>`;
     }
     const c = s.counts;
     $('#hdrStatus').textContent = `${c.transcribed}/${c.total} transcribed · ${c.pruned} pruned · prune ${s.prune_unlocked?'unlocked':'locked'}`;
