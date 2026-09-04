@@ -82,10 +82,12 @@ Every key can be overridden with `PLAUDVAULT_<KEY>` in the environment.
 ## Daily use
 
 ```bash
-plaudctl run       # sync → transcribe → diarize → summarize → title → tone → notes → extract
+plaudctl run       # sync → transcribe → diarize → summarize → title → tone
+                   #   → notes → extract → index → tier → browse
 plaudctl fresh     # is the vault up to date? (--cloud also asks Plaud)
 plaudctl status    # what's archived, what's pending, what's healthy
 plaudctl verify    # re-hash the archive, catch bitrot or missing files
+plaudctl browse    # PLAUD/by-name/ — the archive under readable names
 plaudctl web       # the console
 ```
 
@@ -95,6 +97,7 @@ plaudctl web       # the console
 plaudctl service install                 # console always on, sync 4x/day
 plaudctl service install --hours 8,13,18 # or pick your own
 plaudctl service status
+plaudctl service restart                 # after a code change — see below
 plaudctl service uninstall
 ```
 
@@ -332,6 +335,21 @@ Search returns **cited passages** — recording, timestamp, tier, and the words 
 The client's model does the synthesis; this server does the retrieval and never
 paraphrases, because a paraphrase with no timestamp is exactly the thing you cannot check.
 
+**Constraints are arguments, not prose.** `search_recordings` takes `period` and
+`speaker`; `list_actions` takes `period`, `kind` and `owner`. Both apply them before
+ranking, so an agent asking about March gets March:
+
+```jsonc
+list_actions(period="March 2026", kind="commitment", status="accepted")
+// → rows with text, owner, due date, the verbatim quote, the recording and
+//   timestamp to check it against, and `dispatchable` — which is false unless a
+//   human accepted it.
+```
+
+That is the tool for "what did I commit to in March". Similarity search cannot honour a
+date, and an agent that asks it to will get a confident answer drawn from the wrong
+months.
+
 Tier is enforced here and nowhere else. `mcp_tier_scope` decides what a client may read
 and defaults to what the console shows; `exclude` is unreachable through every path
 regardless, and audio is never served. `--tiers stack` narrows one client without changing
@@ -378,10 +396,22 @@ the recording stays lost. Embeddings do.
 ```bash
 plaudctl index                              # embed transcripts (idempotent)
 plaudctl search "feeling underpaid at work"
+plaudctl search "what did I commit to" --period "August 2026"
+plaudctl search "the schema argument" --speaker Chidera
 ```
 
 Or the **Search** tab in the console, where every hit opens the recording cued to the
 moment it was said.
+
+**State a constraint as a flag, not inside the query.** `--period` ("March",
+"March 2026", "2026-03-14", "last 30 days") and `--speaker` are applied in SQL before
+anything is ranked. Written into the query text instead they do nothing: asked
+*"what did I commit to in August"* as free text, this returned a September recording,
+because "August" is compared as meaning rather than read as a bound.
+
+For commitments and tasks specifically, reach for the action board rather than search —
+those live in a table with dates and owners, and similarity is the wrong instrument for
+a question that is really a filter.
 
 Indexing runs as part of `plaudctl run`. On a ~20-hour archive it is ~700 passages and
 takes about **14 seconds**; search itself is one embedding call plus a matrix multiply.
@@ -630,8 +660,20 @@ killed run can't wedge the pipeline.
   the `owner` on commitments, but nothing currently re-extracts, so that gain is not
   realised on recordings extracted before they were diarized.
 
-- **No speaker diarization.** Plaud labels speakers; local Whisper doesn't. Adding
-  `pyannote.audio` would close this at the cost of a gated-model login.
+- **Oblique retrieval is roughly a coin flip.** Measured over 48 generated queries:
+  naming a person, company or number finds the right recording first 79% of the time;
+  describing the same thing in words the recording did not use, 55%. The second number is
+  the one that matters, because it is the case semantic search exists for.
+- **A long recording is not one conversation, and everything assumes it is.** A pin left
+  running produces one file holding several unrelated conversations; a 2.9-hour file here
+  contains a compliance audit, a job interview and two introductions. One title, one
+  summary and one tone score are stretched across all of it, and its chunk count puts it
+  near the top of almost every search.
+- **The console can serve a newer page than its own code.** `index.html` is read from disk
+  each request; the Python is imported once. A console left running across an edit serves
+  the new page against the old endpoints, and the symptom is a feature that 404s rather
+  than anything resembling a stale process. It now detects this and says so —
+  `plaudctl service restart` is the fix.
 - **Local ASR differs from Plaud's.** In testing, `whisper-large-v3-turbo` caught a
   90-second stretch Plaud's own transcript dropped entirely, but it garbles some
   crosstalk. Plaud's transcript is kept in `meta/<id>.json` so you have both.

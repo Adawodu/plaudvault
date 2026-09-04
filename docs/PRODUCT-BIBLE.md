@@ -506,7 +506,7 @@ a mid-corpus change puts a seam in the trend that looks like a mood shift and is
 ## 5. Status
 
 <!-- BEGIN:STATUS (generated — do not edit by hand) -->
-_Generated 2026-09-03 from git and the live archive._
+_Generated 2026-09-04 from git and the live archive._
 
 ### Codebase
 
@@ -514,7 +514,7 @@ _Generated 2026-09-03 from git and the live archive._
 |---|---|
 | Python modules | 30 |
 | Lines of Python | 9,250 |
-| Commits | 25 |
+| Commits | 26 |
 | CLI verbs | 27 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `browse`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
 Largest modules: `cli.py` (937), `store.py` (908), `web.py` (860), `story.py` (804), `diarize.py` (536), `mcp_server.py` (481).
@@ -545,6 +545,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-09-04 | Redraw the diagrams against what the pipeline actually is |
 | 2026-09-03 | Make a stated constraint a filter, and give the cloud a tier scope |
 | 2026-09-02 | Tell me when the console is running code older than the files on disk |
 | 2026-09-02 | Play the voice that only ever interjects, and play it from the inbox |

@@ -1591,13 +1591,13 @@
    "updated": 1,
    "link": null,
    "locked": false,
-   "text": "Every transition is journalled append-only to action_events \u2014 526 rows today.\nCycle time and adherence are computed from that, never from mutable columns, so history survives edits.",
+   "text": "Every transition is journalled append-only to action_events \u2014 1263 rows today.\nCycle time and adherence are computed from that, never from mutable columns, so history survives edits.",
    "fontSize": 13,
    "fontFamily": 3,
    "textAlign": "left",
    "verticalAlign": "top",
    "containerId": null,
-   "originalText": "Every transition is journalled append-only to action_events \u2014 526 rows today.\nCycle time and adherence are computed from that, never from mutable columns, so history survives edits.",
+   "originalText": "Every transition is journalled append-only to action_events \u2014 1263 rows today.\nCycle time and adherence are computed from that, never from mutable columns, so history survives edits.",
    "lineHeight": 1.25
   },
   {
@@ -1778,13 +1778,13 @@
    "updated": 1,
    "link": null,
    "locked": false,
-   "text": "one embedding call, then\n682 dot products in numpy\n(under a millisecond)\nexcluded recordings skipped",
+   "text": "one embedding call, then\n1527 dot products in numpy\n(under a millisecond)\nexcluded recordings skipped\nperiod / speaker filter first",
    "fontSize": 13,
    "fontFamily": 3,
    "textAlign": "left",
    "verticalAlign": "top",
    "containerId": null,
-   "originalText": "one embedding call, then\n682 dot products in numpy\n(under a millisecond)\nexcluded recordings skipped",
+   "originalText": "one embedding call, then\n1527 dot products in numpy\n(under a millisecond)\nexcluded recordings skipped\nperiod / speaker filter first",
    "lineHeight": 1.25
   },
   {
