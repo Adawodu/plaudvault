@@ -33,7 +33,9 @@ except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP as _Server
 
 from . import dispatch as dispatch_mod
+from . import period as period_mod
 from . import search as search_mod
+from .search import _hhmmss
 from .config import Config, load
 from .store import Store
 from .summarize import summary_path
@@ -88,26 +90,42 @@ def _cite(cfg: Config, row, store: Store) -> dict:
 
 
 @mcp.tool()
-def search_recordings(query: str, limit: int = 8) -> str:
+def search_recordings(query: str, limit: int = 8, period: str = "",
+                      speaker: str = "") -> str:
     """Search the voice-recording archive by meaning and return cited passages.
 
-    Use this to answer "what did I say about X", "when did we discuss Y", "what did
-    <person> commit to". Every hit carries the recording, a timestamp inside it, and
-    the passage verbatim — quote the passage and cite the recording and timestamp
-    rather than summarising without one.
+    Use this to answer "what did I say about X", "when did we discuss Y". Every hit
+    carries the recording, a timestamp inside it, and the passage verbatim — quote the
+    passage and cite the recording and timestamp rather than summarising without one.
+
+    **Put constraints in the arguments, not in the query text.** `period` ("March",
+    "March 2026", "2026-03-14", "last 30 days") and `speaker` are applied as filters
+    before ranking. Embedding them in the query instead does nothing useful: asked
+    "what did I commit to in August" as free text, this returned a September recording,
+    because "August" was compared as meaning rather than read as a bound.
+
+    For commitments and tasks, prefer `list_actions` — those live in a table with dates
+    and owners, and a similarity search over transcripts is the wrong instrument for a
+    question that is really a filter.
 
     Scores are cosine similarity, not confidence: unrelated English sits around
     0.3-0.5, so a top hit at 0.55 may still be the best the archive holds. Compare
     scores to each other, never against an absolute bar.
     """
     cfg = _cfg()
+    try:
+        since, until = period_mod.parse(period)
+    except period_mod.BadPeriod as exc:
+        return json.dumps({"error": f"period: {exc}"})
     with Store(cfg.db_path) as store:
         ok, why = search_mod.available(cfg)
         if not ok:
             return json.dumps({"error": f"embedding model unavailable — {why}"})
         # Over-fetch, because tier filtering happens after ranking and could
         # otherwise return three hits when the caller asked for eight.
-        hits = search_mod.search(cfg, store, query, k=max(limit * 3, limit))
+        hits = search_mod.search(cfg, store, query, k=max(limit * 3, limit),
+                                 since=since, until=until,
+                                 speaker=speaker.strip() or None)
         out = []
         for h in hits:
             if not _visible(cfg, store, h["tier"]):
@@ -126,6 +144,8 @@ def search_recordings(query: str, limit: int = 8) -> str:
         return json.dumps(
             {
                 "query": query,
+                "period": period or "all time",
+                "speaker": speaker or None,
                 "hits": out,
                 "scope": sorted(_tiers(cfg)),
                 "note": "scores are cosine similarity, not confidence",
@@ -378,12 +398,35 @@ def propose_action(text: str, recording_id: str = "", owner: str = "",
 
 
 @mcp.tool()
-def list_actions(status: str = "accepted", limit: int = 30) -> str:
-    """The action board: proposed | accepted | in_progress | done | dropped."""
+def list_actions(status: str = "accepted", limit: int = 30, period: str = "",
+                 kind: str = "", owner: str = "") -> str:
+    """The action board, filtered — the tool for "what did I commit to in March".
+
+    `status`: proposed | accepted | in_progress | done | dropped. Pass "" for any.
+      Only **accepted** actions may be dispatched to an agent; a `proposed` one is a
+      machine guess a human has not confirmed, and acting on it is the thing the
+      acceptance step exists to prevent.
+    `period`: "March", "March 2026", "2026-03", "2026-03-14", "2026", "last 30 days",
+      "today". Bounds when the commitment was **recorded**, not when it is due — only a
+      handful of actions carry a due date, so due-date filtering would silently return
+      almost nothing.
+    `kind`: commitment | suggestion | manual.
+    `owner`: whose commitment, matched case-insensitively against the extracted owner.
+
+    Prefer this over search_recordings for any question about commitments or tasks in a
+    time range. Similarity search cannot honour a date: asked for August it will return
+    September recordings, because "August" is compared as meaning rather than read as a
+    bound.
+    """
     cfg = _cfg()
+    try:
+        since, until = period_mod.parse(period)
+    except period_mod.BadPeriod as exc:
+        return json.dumps({"error": f"period: {exc}"})
     with Store(cfg.db_path) as store:
         out = []
-        for a in store.actions(status=status or None):
+        for a in store.actions(status=status or None, kind=kind or None,
+                               owner=owner or None, since=since, until=until):
             rec = store.get(a["recording_id"]) if a["recording_id"] else None
             if rec is not None:
                 t = store.triage_of(rec["id"])
@@ -394,11 +437,21 @@ def list_actions(status: str = "accepted", limit: int = 30) -> str:
                     "action_id": a["id"],
                     "text": a["text"],
                     "status": a["status"],
+                    "kind": a["kind"],
                     "owner": a["owner"],
                     "due_iso": time.strftime("%Y-%m-%d", time.localtime(a["due_at"]))
                     if a["due_at"] else None,
+                    # The line that was actually said. Check the action against it
+                    # before acting: the extractor still mistakes rhetoric for
+                    # commitment, and this is what makes that visible.
+                    "quote": a["quote"],
+                    "recorded_iso": time.strftime("%Y-%m-%d %H:%M",
+                                                  time.localtime(a["recorded_at"]))
+                    if a["recorded_at"] else None,
+                    "at": _hhmmss(a["at_ms"]) if a["at_ms"] is not None else None,
                     "recording": (rec["title"] or rec["filename"]) if rec else None,
                     "recording_id": a["recording_id"],
+                    "dispatchable": a["status"] == "accepted",
                     "dispatched": [
                         {"dispatch_id": d["id"], "agent": d["agent"], "status": d["status"]}
                         for d in store.dispatches(action_id=a["id"])
@@ -407,7 +460,19 @@ def list_actions(status: str = "accepted", limit: int = 30) -> str:
             )
             if len(out) >= max(1, min(limit, 200)):
                 break
-        return json.dumps({"status": status, "actions": out}, indent=1)
+        return json.dumps(
+            {
+                "status": status or "any",
+                "period": period or "all time",
+                "range": {
+                    "since": time.strftime("%Y-%m-%d", time.localtime(since)) if since else None,
+                    "until": time.strftime("%Y-%m-%d", time.localtime(until)) if until else None,
+                },
+                "actions": out,
+                "note": "only status=accepted may be dispatched; check each against its quote",
+            },
+            indent=1,
+        )
 
 
 def serve(tiers: set[str] | None = None) -> None:

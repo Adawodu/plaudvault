@@ -103,7 +103,7 @@ def _clamp(value, lo: float, hi: float, default: float | None = None) -> float |
 
 
 def _score_segment(cfg: Config, chunk: str, n: int) -> dict | None:
-    data = _parse_object(_generate(cfg, PROMPT.format(chunk=chunk)))
+    data = _parse_object(_generate(cfg, PROMPT.format(chunk=chunk), tier=tier))
     if not data:
         return None
     valence = _clamp(data.get("valence"), -1, 1)
@@ -163,7 +163,7 @@ def _aggregate(segments: list[dict]) -> dict:
     }
 
 
-def score_text(cfg: Config, text: str) -> dict | None:
+def score_text(cfg: Config, text: str, *, tier: str | None = None) -> dict | None:
     """One reading for a whole transcript, or None if nothing could be scored."""
     segments = [
         seg
@@ -194,7 +194,8 @@ def run(cfg: Config, store: Store, *, limit: int | None = None, force: bool = Fa
             continue
         print(f"  [{i}/{len(rows)}] {row['filename'][:60]} ...", flush=True)
         try:
-            result = score_text(cfg, text)
+            _t = store.triage_of(row['id'])
+            result = score_text(cfg, text, tier=(_t['tier'] if _t else None))
             if result is None:
                 stats["failed"] += 1
                 print("    [fail] no usable reading returned")

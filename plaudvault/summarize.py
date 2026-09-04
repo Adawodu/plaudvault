@@ -81,23 +81,26 @@ def _chunk(text: str, size: int = CHUNK_CHARS) -> list[str]:
     return chunks
 
 
-def _generate(cfg: Config, prompt: str, *, timeout: float = 900) -> str:
+def _generate(cfg: Config, prompt: str, *, timeout: float = 900,
+              tier: str | None = None) -> str:
     """Kept as the single call site the prompt modules share."""
-    return generate(cfg, prompt, timeout=timeout)
+    return generate(cfg, prompt, timeout=timeout, tier=tier)
 
 
-def summarize_text(cfg: Config, text: str, *, title: str, when: str, minutes: float) -> str:
+def summarize_text(cfg: Config, text: str, *, title: str, when: str, minutes: float,
+                   tier: str | None = None) -> str:
     chunks = _chunk(text)
     if len(chunks) == 1:
         digests = chunks[0]
     else:
         digests = "\n\n".join(
-            f"--- segment {i} of {len(chunks)} ---\n{_generate(cfg, MAP_PROMPT.format(chunk=c))}"
+            f"--- segment {i} of {len(chunks)} ---\n{_generate(cfg, MAP_PROMPT.format(chunk=c), tier=tier)}"
             for i, c in enumerate(chunks, 1)
         )
     return _generate(
         cfg,
         REDUCE_PROMPT.format(title=title, when=when, minutes=minutes, digests=digests),
+        tier=tier,
     )
 
 
@@ -128,8 +131,10 @@ def run(cfg: Config, store: Store, *, limit: int | None = None, force: bool = Fa
         print(f"  [{i}/{len(rows)}] {row['filename'][:60]} ...", flush=True)
         t0 = time.time()
         try:
+            t = store.triage_of(row["id"])
             md = summarize_text(
-                cfg, text, title=row["filename"], when=when, minutes=row["duration_s"] / 60
+                cfg, text, title=row["filename"], when=when, minutes=row["duration_s"] / 60,
+                tier=(t["tier"] if t else None),
             )
             path = summary_path(cfg, row["id"])
             path.write_text(md + "\n")

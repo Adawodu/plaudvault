@@ -63,7 +63,40 @@ def _auth_headers(cfg: Config) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
-def generate(cfg: Config, prompt: str, *, temperature: float = 0.2, timeout: float = 900) -> str:
+class RemoteNotPermitted(LLMError):
+    """This recording's tier is not allowed to reach a remote model."""
+
+
+def cloud_tiers(cfg: Config) -> set[str]:
+    return {t.strip() for t in (cfg.cloud_tier_scope or "").split(",") if t.strip()}
+
+
+def remote_allowed(cfg: Config, tier: str | None) -> bool:
+    """May a recording of this tier be sent to the configured provider?
+
+    Always true for a local provider — nothing leaves the machine. For a remote one the
+    answer comes from `cloud_tier_scope`, which is empty by default: holding an API key
+    is not the same as deciding which conversations may leave, and those two things must
+    not be one switch. `tier=None` means the caller could not say which recording this
+    is, and an unknown tier is refused rather than assumed safe.
+    """
+    if is_local(cfg):
+        return True
+    scope = cloud_tiers(cfg)
+    if not scope:
+        return False
+    return (tier or "") in scope or (tier is None and False)
+
+
+def generate(cfg: Config, prompt: str, *, temperature: float = 0.2, timeout: float = 900,
+             tier: str | None = None) -> str:
+    if not remote_allowed(cfg, tier):
+        scope = cloud_tiers(cfg)
+        raise RemoteNotPermitted(
+            f"tier {tier or 'unknown'!r} may not be sent to {cfg.openai_base_url} — "
+            + (f"cloud_tier_scope allows {sorted(scope)}" if scope
+               else "cloud_tier_scope is empty, so no recording may leave this machine")
+        )
     if cfg.llm_provider == "ollama":
         resp = httpx.post(
             f"{cfg.ollama_host}/api/generate",

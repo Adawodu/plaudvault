@@ -83,12 +83,13 @@ def _clean(raw: str) -> str:
     return title[:200]
 
 
-def title_for(cfg: Config, *, summary: str = "", transcript: str = "") -> str:
+def title_for(cfg: Config, *, summary: str = "", transcript: str = "",
+              tier: str | None = None) -> str:
     """Propose a title from whatever text there is. "" means "could not name it"."""
     body = (summary or transcript or "").strip()
     if len(body) < 80:
         return ""
-    return _clean(_generate(cfg, PROMPT.format(body=body[:MAX_BODY]), timeout=180))
+    return _clean(_generate(cfg, PROMPT.format(body=body[:MAX_BODY]), timeout=180, tier=tier))
 
 
 def run(cfg: Config, store: Store, *, limit: int | None = None, force: bool = False) -> dict:
@@ -117,7 +118,9 @@ def run(cfg: Config, store: Store, *, limit: int | None = None, force: bool = Fa
         summary = sp.read_text() if sp.exists() else ""
         transcript = "" if summary else read_transcript(cfg, row["id"])
         try:
-            title = title_for(cfg, summary=summary, transcript=transcript)
+            _t = store.triage_of(row['id'])
+            title = title_for(cfg, summary=summary, transcript=transcript,
+                              tier=(_t['tier'] if _t else None))
             if not title:
                 # Record the visit so the next run does not pay for the same call
                 # again. A recording nothing can name is a permanent state, not a
@@ -156,10 +159,12 @@ def retitle_after(cfg: Config, store: Store, rec_id: str) -> str:
     if row is None or row["title_source"] == "human":
         return row["title"] if row else ""
     sp = summary_path(cfg, rec_id)
+    _t = store.triage_of(rec_id)
     title = title_for(
         cfg,
         summary=sp.read_text() if sp.exists() else "",
         transcript="" if sp.exists() else read_transcript(cfg, rec_id),
+        tier=(_t["tier"] if _t else None),
     )
     if title:
         store.set_title(rec_id, title, source="model")

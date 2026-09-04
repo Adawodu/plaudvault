@@ -440,6 +440,55 @@ The dialog always sent the checkbox so nobody noticed; an inline rename sends on
 which would have silently un-me'd you the second time you confirmed your own voice.
 `is_me=None` now means *do not touch it*, and only an explicit value changes it.
 
+### D26 — A constraint the caller stated is a filter, never a hint to the ranker
+`plaudctl search "what did I commit to in August"` returned, among its top four, a
+recording from **September**, and four passages that were not commitments. Nothing was
+broken: "August" was embedded as meaning and compared against text, which is all an
+unfiltered vector search can do with it. Meanwhile the same question as a query over the
+tables — recordings started in August joined to actions of `kind = 'commitment'` —
+returns 71 correct rows.
+
+The archive held the answer. Similarity search was the wrong instrument, and it failed
+*confidently*, which is the failure the eval harness exists to catch and the one that
+matters most now that an MCP client writes prose over these hits.
+
+So `store.chunks()` and `search()` take `since`, `until`, `tiers` and `speaker`, applied
+in SQL **before** anything is ranked, and the same filters reach the CLI (`--period`,
+`--speaker`) and the MCP tool. Filtering before ranking rather than after also fixes a
+quieter bug: post-filtering a top-k list returns three hits when eight were asked for and
+gives no way to tell "nothing matched" from "the good matches were filtered out".
+
+`plaudvault/period.py` turns what a person says into a half-open range — `"March"`,
+`"March 2026"`, `"2026-03-14"`, `"last 30 days"` — because a tool that only accepts
+`YYYY-MM-DD` pushes that conversion onto an agent, where an off-by-one month looks
+exactly like an archive with nothing in it. A bare month resolves to the most recent one
+that has already started, and **an unparseable period raises rather than defaulting to no
+filter**: silently answering a question about March with the whole corpus would look
+entirely plausible.
+
+`list_actions` gained `period`, `kind` and `owner`, and each row now carries the quote,
+the recording timestamp and a `dispatchable` flag. Its period bounds **when the
+commitment was recorded, not when it is due** — only 4 of 681 actions carry a due date,
+so due-date filtering would answer a question nobody asked and return nearly nothing
+while appearing to work.
+
+### D27 — An API key is not permission; the cloud gets a tier scope
+A larger model is the obvious answer to B8, D14 rules out a larger *local* one on 24 GB,
+and `llm_provider = "openai"` already targets any OpenAI-compatible endpoint. So the
+remaining obstacle to a cloud model was never plumbing — it is that this archive holds
+therapy sessions, arguments with a spouse and conversations in front of children beside
+compliance meetings, and `is_local()` drove a single global warning that could not tell
+them apart.
+
+`cloud_tier_scope` is that distinction, enforced the way D21 enforces the MCP scope.
+**It is empty by default**: setting a key opens nothing. `generate()` refuses a tier
+outside the scope, and refuses rather than quietly falling back to the local model, since
+a silent downgrade produces different output with nothing recording which model wrote it.
+An unknown tier is refused too — the stages now pass the recording's tier explicitly, so
+"I could not tell" means no.
+
+This landed *before* any key did, which is the only order in which it is worth anything.
+
 ### D14 — qwen3:8b, not the largest model available
 `qwen3.8` (27.3B, Q4_K_M, 17.7 GB) was pulled and **cannot load** on a 24 GB machine:
 5m04s of thrashing, swap climbing, then `timed out waiting for llama-server to start`,
@@ -457,32 +506,32 @@ a mid-corpus change puts a seam in the trend that looks like a mood shift and is
 ## 5. Status
 
 <!-- BEGIN:STATUS (generated — do not edit by hand) -->
-_Generated 2026-09-02 from git and the live archive._
+_Generated 2026-09-03 from git and the live archive._
 
 ### Codebase
 
 | | |
 |---|---|
-| Python modules | 29 |
-| Lines of Python | 8,964 |
-| Commits | 24 |
+| Python modules | 30 |
+| Lines of Python | 9,250 |
+| Commits | 25 |
 | CLI verbs | 27 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `browse`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `cli.py` (923), `web.py` (860), `store.py` (853), `story.py` (804), `diarize.py` (536), `mcp_server.py` (416).
+Largest modules: `cli.py` (937), `store.py` (908), `web.py` (860), `story.py` (804), `diarize.py` (536), `mcp_server.py` (481).
 
 ### Live archive
 
 | | |
 |---|---|
 | Recordings | 62 |
-| Transcribed | 61 |
-| Tone scored | 60 |
-| Indexed chunks | 1,506 |
-| Triaged | 57 |
-| Open commitments | 105 |
-| Action events | 1,259 |
+| Transcribed | 62 |
+| Tone scored | 61 |
+| Indexed chunks | 1,527 |
+| Triaged | 62 |
+| Open commitments | 109 |
+| Action events | 1,263 |
 | Audio captured | 42.1 hours |
-| Tiers | exclude 3 · local 1 · stack 53 |
+| Tiers | exclude 3 · local 1 · stack 58 |
 
 <!-- END:STATUS -->
 
@@ -496,6 +545,7 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-09-03 | Make a stated constraint a filter, and give the cloud a tier scope |
 | 2026-09-02 | Tell me when the console is running code older than the files on disk |
 | 2026-09-02 | Play the voice that only ever interjects, and play it from the inbox |
 | 2026-09-02 | Hear a voice before you name it, and name it without opening a dialog |
@@ -534,7 +584,7 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 |---|---|---|
 | B14 | **A verified golden set** | B3 built the instrument; every one of its 48 queries is still `verified: false`, because each was written *from* the recording it is scored against. That measures a strictly easier task than the real one, so the harness currently has no number anybody is allowed to quote. Queries written from memory, before looking, are the fix. Blocks B4, B5 and D-open-1, all of which are comparisons against a baseline. |
 | B4 | **Neighbour expansion for answer context** | Chunks are 1200 chars, tuned for search snippets. An MCP client answering a question wants the hit plus its neighbours; `get_transcript` with a time window is the manual version of this. |
-| B5 | **Date/tier filters ahead of vector search** | "What did I commit to last week" is a metadata question. Similarity alone cannot answer it. |
+| B16 | **Due-date resolution during extraction** | "By Friday" has to become a date while the transcript is in front of the model, or every calendar invite needs a human to retype it. 4 of 681 actions carry one. |
 | B15 | **Split a recording at conversation boundaries** | A pin left running produces one file holding several unrelated conversations. Title, summary, tone and tier are all per-recording and all wrong for such a file, and its chunk count lets it dominate retrieval. Diarization already knows where the voices change; a gap plus a speaker-set change is most of a boundary detector. |
 
 ### Later — valuable, design not settled
@@ -560,6 +610,8 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 | Exposing the console beyond loopback | No auth by design. Would need a real identity proxy first. An agent on a remote VM reaching this archive is B13, and it is a networking-and-identity problem, not a plaudvault feature. |
 | Feeding automatic speaker matches back into voiceprints | D18. One bad match compounds into a drifting identity with nothing in the data saying when it went wrong. |
 | A flag to dispatch a `proposed` action | D20. The acceptance step *is* the human reading the quote. |
+| Filtering search hits after ranking | D26. Returns three hits when eight were asked for, and cannot distinguish "nothing matched" from "the matches were filtered out". |
+| A global switch for sending transcripts to a cloud model | D27. This archive is not one kind of conversation, and one switch for all of it is how a therapy session reaches a vendor. |
 
 ---
 

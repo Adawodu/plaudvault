@@ -178,8 +178,17 @@ def search(
     k: int = 20,
     include_excluded: bool = False,
     min_score: float = 0.0,
+    since: int | None = None,
+    until: int | None = None,
+    tiers: set[str] | None = None,
+    speaker: str | None = None,
 ) -> list[dict]:
     """Nearest chunks to `query`, best first, one hit per recording-moment.
+
+    `since`/`until` (epoch seconds), `tiers` and `speaker` narrow the candidates
+    *before* ranking. A stated constraint is not something the embedding can be trusted
+    to honour — asked for August, an unfiltered search returned a September recording —
+    so anything the caller can state is applied as a filter and never as a hint.
 
     Scores are raw cosine similarity. They are NOT probabilities and there is no
     threshold below which a result is "wrong" — this model puts most unrelated English
@@ -188,7 +197,8 @@ def search(
     """
     if not query.strip():
         return []
-    rows = store.chunks(model=cfg.embed_model, include_excluded=include_excluded)
+    rows = store.chunks(model=cfg.embed_model, include_excluded=include_excluded,
+                        since=since, until=until, tiers=tiers, speaker=speaker)
     if not rows:
         return []
 

@@ -165,14 +165,15 @@ def _grounded(quote: str, chunk_norm: str) -> bool:
     return sum(w in chunk_norm for w in words) / len(words) >= 0.6
 
 
-def extract_from_text(cfg: Config, text: str, *, suggestions: bool | None = None) -> list[dict]:
+def extract_from_text(cfg: Config, text: str, *, suggestions: bool | None = None,
+                      tier: str | None = None) -> list[dict]:
     if suggestions is None:
         suggestions = cfg.extract_suggestions
     prompt = build_prompt(suggestions=suggestions)
     found: list[dict] = []
     dropped = skipped_kind = 0
     for chunk in _chunk(text):
-        raw = _generate(cfg, prompt.format(chunk=chunk))
+        raw = _generate(cfg, prompt.format(chunk=chunk), tier=tier)
         chunk_norm = _norm(chunk)
         for item in _parse_json_array(raw):
             if not _grounded(str(item.get("quote") or ""), chunk_norm):
@@ -247,7 +248,9 @@ def run(
                 for a in store.actions(recording_id=row["id"])
             }
             n = 0
-            for item in extract_from_text(cfg, text, suggestions=suggestions):
+            _t = store.triage_of(row['id'])
+            for item in extract_from_text(cfg, text, suggestions=suggestions,
+                                          tier=(_t['tier'] if _t else None)):
                 key = re.sub(r"[^a-z0-9 ]", "", item["text"].lower())[:60]
                 if key in existing:
                     continue

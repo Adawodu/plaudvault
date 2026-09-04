@@ -490,15 +490,44 @@ class Store:
                 ],
             )
 
-    def chunks(self, *, model: str, include_excluded: bool = False) -> list[sqlite3.Row]:
+    def chunks(self, *, model: str, include_excluded: bool = False,
+               since: int | None = None, until: int | None = None,
+               tiers: set[str] | None = None,
+               speaker: str | None = None) -> list[sqlite3.Row]:
+        """Candidate chunks for a search, narrowed before anything is ranked.
+
+        Filtering here rather than after scoring is the whole point: "what did I commit
+        to in August" is a date range and a similarity question, and a ranker given the
+        whole corpus answers only the second — it returned a September recording for
+        exactly that query. A constraint the caller stated must not be left to the
+        embedding to infer, because it cannot.
+        """
         q = (
             "SELECT c.recording_id, c.start_ms, c.text, c.vector, r.filename, r.title, r.started_at,"
             " t.tier FROM chunks c JOIN recordings r ON r.id = c.recording_id "
             "LEFT JOIN triage t ON t.recording_id = c.recording_id WHERE c.model = ? "
         )
+        args: list = [model]
         if not include_excluded:
             q += "AND (t.tier IS NULL OR t.tier != 'exclude') "
-        return self.db.execute(q + "ORDER BY c.recording_id, c.idx", (model,)).fetchall()
+        if since is not None:
+            q += "AND r.started_at >= ? "
+            args.append(int(since))
+        if until is not None:
+            q += "AND r.started_at < ? "
+            args.append(int(until))
+        if tiers:
+            # `untriaged` is a tier in the vocabulary and a NULL in the table.
+            names = sorted(tiers)
+            marks = ",".join("?" * len(names))
+            null_ok = "untriaged" in tiers
+            q += f"AND (COALESCE(t.tier, 'untriaged') IN ({marks})" + (" OR t.tier IS NULL)" if null_ok else ")") + " "
+            args.extend(names)
+        if speaker:
+            q += ("AND c.recording_id IN (SELECT rs.recording_id FROM recording_speakers rs "
+                  "JOIN speakers s ON s.id = rs.speaker_id WHERE s.name = ? COLLATE NOCASE) ")
+            args.append(speaker)
+        return self.db.execute(q + "ORDER BY c.recording_id, c.idx", args).fetchall()
 
     def needing_index(self, model: str) -> list[sqlite3.Row]:
         """Transcribed recordings with no chunks for this model — or none at all.
@@ -539,16 +568,42 @@ class Store:
     def get_action(self, action_id: int) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM actions WHERE id = ?", (action_id,)).fetchone()
 
-    def actions(self, *, status: str | None = None, recording_id: str | None = None) -> list[sqlite3.Row]:
-        q = "SELECT * FROM actions WHERE 1=1"
+    def actions(self, *, status: str | None = None, recording_id: str | None = None,
+                kind: str | None = None, owner: str | None = None,
+                since: int | None = None, until: int | None = None,
+                statuses: list[str] | None = None) -> list[sqlite3.Row]:
+        """The action board, filtered.
+
+        `since`/`until` bound the **recording's** start, not `due_at`: "commitments in
+        March" asks about when something was said, and only 4 of 681 actions carry a due
+        date, so filtering on that would answer a question nobody asked and return
+        almost nothing while doing it.
+        """
+        q = ("SELECT a.*, r.started_at AS recorded_at, r.title AS recording_title "
+             "FROM actions a LEFT JOIN recordings r ON r.id = a.recording_id WHERE 1=1")
         args: list = []
         if status:
-            q += " AND status = ?"
+            q += " AND a.status = ?"
             args.append(status)
+        if statuses:
+            q += f" AND a.status IN ({','.join('?' * len(statuses))})"
+            args.extend(statuses)
         if recording_id:
-            q += " AND recording_id = ?"
+            q += " AND a.recording_id = ?"
             args.append(recording_id)
-        q += " ORDER BY COALESCE(due_at, 9e18), created_at DESC"
+        if kind:
+            q += " AND a.kind = ?"
+            args.append(kind)
+        if owner:
+            q += " AND a.owner = ? COLLATE NOCASE"
+            args.append(owner)
+        if since is not None:
+            q += " AND r.started_at >= ?"
+            args.append(int(since))
+        if until is not None:
+            q += " AND r.started_at < ?"
+            args.append(int(until))
+        q += " ORDER BY COALESCE(r.started_at, 0) DESC, COALESCE(a.due_at, 9e18), a.created_at DESC"
         return self.db.execute(q, args).fetchall()
 
     def update_action(self, action_id: int, **fields) -> None:

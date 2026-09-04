@@ -10,7 +10,7 @@ from pathlib import Path
 from . import (auth, diarize, dispatch, evaluate, extract, freshness, notes,
                prune, runlock, search, sentiment, service, setup_wizard, story,
                summarize, sync, tiering, titles, transcribe)
-from . import browse
+from . import browse, period
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -476,13 +476,24 @@ def cmd_index(args, cfg) -> int:
 
 
 def cmd_search(args, cfg) -> int:
+    try:
+        since, until = period.parse(getattr(args, "period", "") or "")
+    except period.BadPeriod as exc:
+        print(f"  --period: {exc}")
+        return 2
     with Store(cfg.db_path) as store:
         hits = search.search(cfg, store, args.query, k=args.limit or 10,
-                             include_excluded=args.excluded)
+                             include_excluded=args.excluded,
+                             since=since, until=until,
+                             speaker=(getattr(args, "speaker", "") or None))
     if not hits:
         with Store(cfg.db_path) as store:
             n = store.index_stats(cfg.embed_model)["chunks"]
-        print("  no matches." if n else "  nothing indexed yet — run: plaudctl index")
+        if n and (since or until or getattr(args, "speaker", "")):
+            print("  no matches in that range — the filter is applied before ranking, "
+                  "so this means the archive has nothing there, not a weak score.")
+        else:
+            print("  no matches." if n else "  nothing indexed yet — run: plaudctl index")
         return 0
     for h in hits:
         print(f"\n  {h['score']:.3f}  {h['started_iso']}  {h['label'][:52]}  [{h['at']}]")
@@ -816,6 +827,9 @@ def main(argv=None) -> int:
     sp.add_argument("query")
     sp.add_argument("--limit", type=int, help="how many hits (default 10)")
     sp.add_argument("--excluded", action="store_true", help="also search excluded recordings")
+    sp.add_argument("--period", default="",
+                    help='narrow by when: "March", "March 2026", "2026-03-14", "last 30 days"')
+    sp.add_argument("--speaker", default="", help="only recordings this named person is in")
 
     sp = add("story", cmd_story, "draw a recording along its own duration")
     sp.add_argument("recording", nargs="?", help="recording id (default: most recently scored)")

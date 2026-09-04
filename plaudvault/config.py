@@ -69,6 +69,12 @@ DEFAULTS: dict = {
     "ollama_model": "qwen3.5:latest",
     "openai_base_url": "https://api.openai.com/v1",
     "openai_model": "gpt-4o-mini",
+    # Which tiers a REMOTE model may see. Empty means none — a key alone does not open
+    # the archive. This is the same enforcement point as `mcp_tier_scope` (D21) applied
+    # to a different consumer: a pin records whoever is in earshot, and an archive that
+    # holds therapy sessions beside compliance meetings cannot have one global switch
+    # deciding whether all of it leaves the machine.
+    "cloud_tier_scope": "",
     # Name of the env var holding the key. The key itself is never stored here.
     "openai_api_key_env": "OPENAI_API_KEY",
 
@@ -148,6 +154,7 @@ class Config:
     ollama_model: str
     openai_base_url: str
     openai_model: str
+    cloud_tier_scope: str
     openai_api_key_env: str
     embed_model: str
     diarize_model: str
