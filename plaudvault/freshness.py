@@ -86,10 +86,37 @@ def _pending(store: Store, cfg: Config) -> list[dict]:
             "fix": "plaudctl sentiment",
         },
         {
+            # Before extract in the list because it gates it: an unclassified recording
+            # is extracted without a budget, which is the old behaviour rather than the
+            # intended one.
+            "stage": "kinds",
+            "count": store.db.execute(
+                "SELECT COUNT(*) FROM recordings r WHERE r.transcript_path IS NOT NULL "
+                "AND r.summary_path IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM conversation_kinds k "
+                "                WHERE k.recording_id = r.id) "
+                f"AND {store.NOT_EXCLUDED}"
+            ).fetchone()[0],
+            "label": "classified by conversation kind",
+            "fix": "plaudctl kinds",
+        },
+        {
             "stage": "extract",
             "count": q("extracted_at IS NULL AND transcript_path IS NOT NULL"),
             "label": "scanned for commitments",
             "fix": "plaudctl extract",
+        },
+        {
+            # Only product conversations get one, so this counts against that subset
+            # rather than the corpus — a zero here means every spec has a brief, not
+            # that nothing was briefed.
+            "stage": "brief",
+            "count": sum(
+                1 for r in store.by_kind("product")
+                if not (cfg.brief_dir / f"{r['id']}.md").exists()
+            ),
+            "label": "briefed (product conversations)",
+            "fix": "plaudctl brief",
         },
         {
             # Keyed on the current embedding model: changing it leaves the corpus half

@@ -18,8 +18,23 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import (auth, browse, diarize, dispatch, freshness, llm, metrics, runlock, search,
-               story, tiering, titles, transcribe)
+from . import (
+    auth,
+    brief,
+    browse,
+    diarize,
+    dispatch,
+    freshness,
+    kinds,
+    llm,
+    metrics,
+    runlock,
+    search,
+    story,
+    tiering,
+    titles,
+    transcribe,
+)
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -58,6 +73,19 @@ def _sentiment_dto(sent) -> dict | None:
     }
 
 
+def _kind_dto(row) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "kind": row["kind"],
+        "budget": kinds.budget(row["kind"]),
+        "extractable": kinds.extractable(row["kind"]),
+        "confidence": row["confidence"],
+        "why": row["why"] or "",
+        "set_by": row["source"],
+    }
+
+
 def _rec_dto(cfg, store, r) -> dict:
     t = store.triage_of(r["id"])
     acts = store.actions(recording_id=r["id"])
@@ -75,6 +103,10 @@ def _rec_dto(cfg, store, r) -> dict:
             for sp in store.recording_speakers(r["id"])
         ],
         "sentiment": _sentiment_dto(store.sentiment_of(r["id"])),
+        # What kind of conversation this is, and therefore how many actions it is
+        # expected to yield. Shown beside the board so an empty one reads as "none
+        # expected from a devotional" rather than as a failed extraction.
+        "kind": _kind_dto(store.kind_of(r["id"])),
         "started_iso": time.strftime("%Y-%m-%d %H:%M", time.localtime(r["started_at"])),
         "duration_min": round((r["duration_s"] or 0) / 60, 1),
         "tier": t["tier"] if t else None,
@@ -82,6 +114,9 @@ def _rec_dto(cfg, store, r) -> dict:
         "triage_note": (t["note"] if t else "") or "",
         "action_counts": {
             "proposed": sum(1 for a in acts if a["status"] == "proposed"),
+            # Shown beside the board so a short list reads as "budgeted", not "all
+            # that was found".
+            "overflow": sum(1 for a in acts if a["status"] == "overflow"),
             "open": sum(1 for a in acts if a["status"] in ("accepted", "in_progress")),
             "done": sum(1 for a in acts if a["status"] == "done"),
         },
@@ -134,7 +169,15 @@ def recording(rec_id: str):
         meta_path = cfg.meta_dir / f"{rec_id}.json"
         dto["has_plaud_transcript"] = meta_path.exists()
 
-        dto["actions"] = [_row(a) for a in store.actions(recording_id=rec_id)]
+        # The board and what the budget cut are two lists, not one. Mixing them would
+        # put items back in front of you that a selection pass deliberately moved out
+        # of the way — and make the count on the card disagree with the page.
+        every = [_row(a) for a in store.actions(recording_id=rec_id)]
+        dto["actions"] = [a for a in every if a["status"] != "overflow"]
+        dto["overflow"] = [a for a in every if a["status"] == "overflow"]
+
+        bp = brief.brief_path(cfg, rec_id)
+        dto["brief"] = bp.read_text() if bp.exists() else ""
         return dto
 
 
@@ -495,6 +538,38 @@ def actions(status: str | None = None):
         return out
 
 
+@app.get("/api/actions/overflow")
+def overflow(recording_id: str | None = None):
+    """What the budget cut, and why.
+
+    Kept behind its own endpoint rather than mixed into the board: the whole point of a
+    budget is that the board is short. But a cut you cannot inspect is one you stop
+    trusting, so this is one click away and carries the model's own reason for each.
+    """
+    cfg = _cfg()
+    with _store(cfg) as store:
+        rows = store.actions(status="overflow", recording_id=recording_id)
+        out = []
+        for a in rows:
+            rec = store.get(a["recording_id"]) if a["recording_id"] else None
+            out.append({**_row(a), "recording_name": titles.display(rec) if rec else None})
+        return out
+
+
+@app.post("/api/actions/{action_id}/promote")
+def promote_action(action_id: int):
+    """Lift one action back above the budget line.
+
+    The inverse of the cut, and the reason the cut is safe to make at all: disagreeing
+    with the selection costs one click, not a re-run.
+    """
+    cfg = _cfg()
+    with _store(cfg) as store:
+        if not store.promote_action(action_id):
+            raise HTTPException(404, "no such overflow action")
+        return {"ok": True, "action": _row(store.get_action(action_id))}
+
+
 @app.post("/api/actions")
 def create_action(body: dict = Body(...)):
     cfg = _cfg()
@@ -518,7 +593,7 @@ def update_action(action_id: int, body: dict = Body(...)):
     }
     fields = {k: v for k, v in body.items() if k in allowed}
     if "status" in fields and fields["status"] not in (
-        "proposed", "accepted", "in_progress", "done", "dropped"
+        "proposed", "accepted", "in_progress", "done", "dropped", "overflow"
     ):
         raise HTTPException(400, "bad status")
     if fields.get("outcome_score") is not None:

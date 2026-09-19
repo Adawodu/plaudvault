@@ -75,6 +75,11 @@ DEFAULTS: dict = {
     # holds therapy sessions beside compliance meetings cannot have one global switch
     # deciding whether all of it leaves the machine.
     "cloud_tier_scope": "",
+    # A bigger model, used only where judgement beats volume — selection and briefs —
+    # and only on the tiers `cloud_tier_scope` already permits. Empty means the cloud is
+    # never reached, whatever flag is passed. An Ollama cloud name ends in `-cloud`
+    # (`gpt-oss:120b-cloud`); anything else is treated as an `openai` endpoint model.
+    "cloud_model": "",
     # Name of the env var holding the key. The key itself is never stored here.
     "openai_api_key_env": "OPENAI_API_KEY",
 
@@ -155,6 +160,7 @@ class Config:
     openai_base_url: str
     openai_model: str
     cloud_tier_scope: str
+    cloud_model: str
     openai_api_key_env: str
     embed_model: str
     diarize_model: str
@@ -188,6 +194,12 @@ class Config:
     @property
     def summary_dir(self) -> Path:
         return self.archive_root / "summaries"
+
+    @property
+    def brief_dir(self) -> Path:
+        """Briefs for `product` conversations — a spec an agent can act on, as
+        distinct from a summary, which is written for a person remembering."""
+        return self.archive_root / "briefs"
 
     @property
     def diarization_dir(self) -> Path:
@@ -281,7 +293,7 @@ class Config:
     def ensure_dirs(self) -> None:
         self.check_archive_available()
         dirs = [self.audio_dir, self.meta_dir, self.transcript_dir, self.summary_dir,
-                self.diarization_dir]
+                self.brief_dir, self.diarization_dir]
         if self.notes_dir:
             dirs.append(self.notes_dir)
         for d in dirs:

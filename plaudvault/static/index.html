@@ -725,6 +725,11 @@ function recCard(r, showTier){
   const prune = r.marked_for_prune ? '<span class="chip bad">marked for deletion</span>' : '';
   const acts = a.proposed ? `<span class="chip warn">${a.proposed} proposed</span>` : '';
   const open = a.open ? `<span class="chip">${a.open} open</span>` : '';
+  // What kind of conversation this was, and what its budget cut. A board of two reads
+  // very differently depending on whether twelve were found or two.
+  const k = r.kind;
+  const kindChip = k ? `<span class="chip" title="${esc(k.why||'')} — budget ${k.budget}${k.set_by==='human'?', set by hand':''}">${esc(k.kind)}</span>` : '';
+  const below = a.overflow ? `<span class="chip" title="kept, below the conversation's budget line">${a.overflow} below the line</span>` : '';
   const s = r.sentiment;
   const tone = s ? `<span class="chip" title="valence ${VAL(s.valence)}, confidence ${s.confidence}"
     style="border-color:${polColor(s.valence)}">${esc(s.label)} ${VAL(s.valence)}</span>` : '';
@@ -737,7 +742,7 @@ function recCard(r, showTier){
           r.display !== r.filename ? ' · <span class="mono">'+esc(r.filename)+'</span>' : ''}</div>
         ${speakerChips(r.speakers, r.id)}</div>
       </div>
-      <div class="row">${showTier?tier:''}${prune}${tone}${acts}${open}
+      <div class="row">${showTier?tier:''}${kindChip}${prune}${tone}${acts}${open}${below}
         <button class="btn sm" onclick="openRec('${r.id}')">Open</button>
         ${r.tier === 'exclude'
           ? `<button class="btn sm" title="Put this back in the console" onclick="dismissRec('${r.id}',true,event)">restore</button>`
@@ -1158,10 +1163,47 @@ async function setTier(tier){
 }
 
 function renderRecActions(){
-  const list = CUR.actions||[];
-  $('#recActions').innerHTML = list.length
-    ? list.map(actionCard).join('')
-    : '<div class="empty" style="padding:22px">No actions yet. Run <span class="mono">plaudctl extract</span> to propose some.</div>';
+  const list = CUR.actions||[], cut = CUR.overflow||[], k = CUR.kind;
+  // An empty board means three different things, and saying which is the whole
+  // difference between a tool that looks broken and one that made a decision.
+  let empty = 'No actions yet. Run <span class="mono">plaudctl extract</span> to propose some.';
+  if (k && !k.extractable)
+    empty = `No actions expected — this is a <b>${esc(k.kind)}</b> conversation, so extraction never ran on it.`;
+  else if (!list.length && cut.length)
+    empty = 'Everything found was below the budget line — see below.';
+  $('#recActions').innerHTML = (list.length
+      ? list.map(actionCard).join('')
+      : `<div class="empty" style="padding:22px">${empty}</div>`)
+    + overflowBlock(cut, k);
+}
+
+// The cut, one click away. Not on the board — the point of a budget is that the board
+// is short — but never hidden, because a filter you cannot see is one you stop
+// trusting, and this one is a model's opinion about a dozen sentences.
+function overflowBlock(cut, k){
+  if (!cut.length) return '';
+  const budget = k ? k.budget : 3;
+  return `<details style="margin-top:14px">
+    <summary class="faint" style="cursor:pointer">
+      ${cut.length} below the line — kept, not discarded${k?` (budget ${budget} for a ${esc(k.kind)} conversation)`:''}
+    </summary>
+    <div style="margin-top:10px">${cut.map(a => `
+      <div class="card" style="opacity:.72">
+        <div class="row spread">
+          <div style="flex:1;min-width:240px">
+            <div>${esc(a.text)}</div>
+            ${a.quote?`<div class="faint" style="margin-top:4px">“${esc(a.quote)}”</div>`:''}
+          </div>
+          <button class="btn sm" title="Put this back on the board"
+                  onclick="promoteAction(${a.id})">promote</button>
+        </div>
+      </div>`).join('')}</div>
+  </details>`;
+}
+
+async function promoteAction(id){
+  await fetch(`/api/actions/${id}/promote`, {method:'POST'});
+  await openRec(CUR.id);
 }
 
 // ---------------------------------------------------------------- actions

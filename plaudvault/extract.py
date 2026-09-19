@@ -14,10 +14,13 @@ import json
 import re
 import time
 
+from . import kinds as kinds_mod
+from . import llm as llm_mod
+from . import select as select_mod
 from .config import Config
-from .store import Store
 from .llm import available
-from .summarize import _chunk, _generate
+from .store import Store
+from .summarize import _chunk, _generate, summary_path
 from .transcribe import read_transcript
 
 # Two prompts rather than one prompt plus a filter. Asking for suggestions and then
@@ -221,7 +224,16 @@ def run(
     limit: int | None = None,
     force: bool = False,
     suggestions: bool | None = None,
+    cloud_select: bool = False,
 ) -> dict:
+    """Extract locally; optionally *choose* with a larger model.
+
+    The split is deliberate. Extraction is ~15 calls per recording and wants recall,
+    which a local 8B does adequately. Selection is one call per recording and is pure
+    judgement, which is where a large model is worth what it costs — and where sending
+    less text buys more. `cloud_select` sends only the candidate list and the summary,
+    never the transcript.
+    """
     rows = store.all() if force else [
         r for r in store.all() if r["transcript_path"] and not r["extracted_at"]
     ]
@@ -229,17 +241,38 @@ def run(
     if limit:
         rows = rows[:limit]
 
-    stats = {"recordings": 0, "proposed": 0, "failed": 0}
+    stats = {"recordings": 0, "proposed": 0, "failed": 0, "not_expected": 0,
+             "unclassified": 0, "overflow": 0, "undecided": 0}
     ok, why = available(cfg)
     if not ok:
         raise RuntimeError(f"language model unavailable — {why}")
+    select_cfg = llm_mod.with_cloud(cfg) if cloud_select else cfg
     want = cfg.extract_suggestions if suggestions is None else suggestions
     scope = "commitments and suggestions" if want else "commitments"
     print(f"  {len(rows)} recordings to scan for {scope} · {cfg.llm_label}")
+    if cloud_select:
+        print(f"  choosing with {select_cfg.llm_label} — candidates and summary only, "
+              f"tiers {sorted(llm_mod.cloud_tiers(cfg)) or 'none'}")
 
     for i, row in enumerate(rows, 1):
         text = read_transcript(cfg, row["id"])
         if not text.strip():
+            continue
+        # What kind of conversation this is decides whether to ask at all. Asking a
+        # devotional or a played-back podcast "what commitments are here?" fifteen
+        # times, once per chunk, is how one prayer produced 69 action items.
+        k = store.kind_of(row["id"])
+        kind = k["kind"] if k else None
+        if k is None:
+            # Not classified is not the same as no actions expected. Extracting
+            # unbudgeted is the old behaviour, and saying so is cheaper than a silent
+            # difference between two recordings on the same board.
+            stats["unclassified"] += 1
+        elif not kinds_mod.extractable(kind):
+            store.update(row["id"], extracted_at=int(time.time()))
+            stats["not_expected"] += 1
+            print(f"  [{i}/{len(rows)}] {row['filename'][:60]} — {kind}, "
+                  f"no actions expected")
             continue
         print(f"  [{i}/{len(rows)}] {row['filename'][:60]} ...", flush=True)
         try:
@@ -247,21 +280,51 @@ def run(
                 re.sub(r"[^a-z0-9 ]", "", a["text"].lower())[:60]
                 for a in store.actions(recording_id=row["id"])
             }
-            n = 0
             _t = store.triage_of(row['id'])
-            for item in extract_from_text(cfg, text, suggestions=suggestions,
-                                          tier=(_t['tier'] if _t else None)):
-                key = re.sub(r"[^a-z0-9 ]", "", item["text"].lower())[:60]
-                if key in existing:
-                    continue
+            tier = _t['tier'] if _t else None
+            fresh = [
+                item for item in extract_from_text(cfg, text, suggestions=suggestions,
+                                                   tier=tier)
+                if re.sub(r"[^a-z0-9 ]", "", item["text"].lower())[:60] not in existing
+            ]
+
+            # Recall first, precision second. Extraction is asked once per chunk and
+            # over-produces by design; this is the one call per recording that spends
+            # the budget, and it can see every candidate at once.
+            sp = summary_path(cfg, row["id"])
+            chosen = select_mod.choose(
+                select_cfg, fresh,
+                summary=sp.read_text() if sp.exists() else "",
+                kind=kind or "other",
+                budget=kinds_mod.budget(kind),
+                tier=tier,
+            )
+            for item in chosen["kept"]:
                 store.add_action(recording_id=row["id"], **item)
-                n += 1
+            for item in chosen["overflow"]:
+                store.add_action(recording_id=row["id"], status="overflow", **item)
+
             store.update(row["id"], extracted_at=int(time.time()))
             stats["recordings"] += 1
-            stats["proposed"] += n
-            print(f"    {n} proposed")
+            stats["proposed"] += len(chosen["kept"])
+            stats["overflow"] += len(chosen["overflow"])
+            if not chosen["decided"]:
+                stats["undecided"] += 1
+            # Both numbers, always. The count below the line is the claim this step
+            # makes about its own judgement, and hiding it would make the board look
+            # like the whole of what was found.
+            below = (f", {len(chosen['overflow'])} below the line"
+                     if chosen["overflow"] else "")
+            undecided = "" if chosen["decided"] else " [selection failed — kept all]"
+            print(f"    {len(chosen['kept'])} proposed{below}{undecided}")
         except Exception as exc:  # noqa: BLE001
             stats["failed"] += 1
             print(f"    [fail] {exc}")
 
+    if stats["not_expected"]:
+        print(f"  [{stats['not_expected']} skipped — a kind that yields no actions]")
+    if stats["unclassified"]:
+        print(f"  [{stats['unclassified']} had no kind yet — run: plaudctl kinds]")
+    if stats["undecided"]:
+        print(f"  [{stats['undecided']} kept in full — selection returned nothing usable]")
     return stats
