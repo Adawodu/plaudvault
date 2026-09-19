@@ -26,10 +26,12 @@ from __future__ import annotations
 import json
 import re
 
+from . import segment as segment_mod
 from .config import Config
 from .llm import available  # noqa: F401  — re-exported so callers gate on one thing
 from .store import Store
 from .summarize import _generate, summary_path
+from .transcribe import read_transcript
 
 # kind -> (budget, what it is). The budget is the most actions extraction may put on
 # the board for such a conversation; 0 means do not extract at all.
@@ -115,43 +117,72 @@ def _parse(raw: str) -> dict | None:
             "why": str(data.get("why") or "").strip()[:120]}
 
 
-def classify_text(cfg: Config, body: str, *, tier: str | None = None) -> dict | None:
-    """Classify one conversation from its summary, or None if nothing usable came back.
+# How much of a segment's transcript to read when classifying it. The opening says what
+# a conversation is for and the closing says how it ended, and between them sits the
+# material that makes a long recording look like every kind at once.
+HEAD_CHARS = 3500
+TAIL_CHARS = 1500
 
-    The summary, not the transcript: it is already written, it is short enough for one
-    call, and what a conversation *was* survives summarising far better than what was
-    committed in it does.
+
+def body_for(cfg: Config, store: Store, conv: dict) -> str:
+    """The text to classify one conversation from.
+
+    A recording that holds one conversation has a summary, and a summary is the better
+    evidence: it is already written, it is dense, and what a conversation *was* survives
+    summarising far better than what was committed in it does.
+
+    A segment has no summary of its own — summaries are per recording, and a summary of
+    a file holding a standup and a school run describes neither. So a segment is
+    classified from its own slice of the transcript, read at both ends: the opening says
+    what the conversation is for, the closing says how it ended.
     """
+    if not conv["segmented"]:
+        sp = summary_path(cfg, conv["recording_id"])
+        return sp.read_text() if sp.exists() else ""
+    text = segment_mod.transcript_for(
+        read_transcript(cfg, conv["recording_id"]), conv["start_ms"], conv["end_ms"])
+    if len(text) <= HEAD_CHARS + TAIL_CHARS:
+        return text
+    return f"{text[:HEAD_CHARS]}\n\n[... middle of the conversation omitted ...]\n\n{text[-TAIL_CHARS:]}"
+
+
+def classify_text(cfg: Config, body: str, *, tier: str | None = None) -> dict | None:
+    """Classify one conversation, or None if nothing usable came back."""
     if not body.strip():
         return None
     return _parse(_generate(cfg, PROMPT.replace("{body}", body[:6000]), tier=tier))
 
 
 def run(cfg: Config, store: Store, *, limit: int | None = None, force: bool = False) -> dict:
-    """Classify recordings that have no kind yet. A human's kind is never overwritten."""
+    """Classify conversations that have no kind yet. A human's kind is never overwritten.
+
+    Per conversation, not per recording: a file holding a standup and a school run holds
+    two kinds, and calling the file one of them is the mistake this view exists to fix.
+    """
     rows = store.needing_kind(force=force)
     if limit:
         rows = rows[:limit]
 
     stats = {"classified": 0, "skipped": 0, "failed": 0, "kinds": {}}
-    print(f"  {len(rows)} recordings to classify · {cfg.llm_label}")
+    print(f"  {len(rows)} conversations to classify · {cfg.llm_label}")
 
-    for i, row in enumerate(rows, 1):
-        sp = summary_path(cfg, row["id"])
-        if not sp.exists():
+    for i, conv in enumerate(rows, 1):
+        body = body_for(cfg, store, conv)
+        if not body.strip():
             # Classifying from nothing would invent a kind, and the kind decides
             # whether extraction runs at all. Left unclassified until summarised.
             stats["skipped"] += 1
             continue
-        print(f"  [{i}/{len(rows)}] {row['filename'][:58]} ...", flush=True)
+        print(f"  [{i}/{len(rows)}] {conv['label'][:58]} ...", flush=True)
         try:
-            t = store.triage_of(row["id"])
-            got = classify_text(cfg, sp.read_text(), tier=(t["tier"] if t else None))
+            t = store.triage_of(conv["recording_id"])
+            got = classify_text(cfg, body, tier=(t["tier"] if t else None))
             if got is None:
                 stats["failed"] += 1
                 print("    [fail] no usable classification returned")
                 continue
-            store.set_kind(row["id"], kind=got["kind"], confidence=got["confidence"],
+            store.set_kind(conv["recording_id"], segment_idx=conv["segment_idx"],
+                           kind=got["kind"], confidence=got["confidence"],
                            why=got["why"], source="model", model=cfg.llm_label)
             stats["classified"] += 1
             stats["kinds"][got["kind"]] = stats["kinds"].get(got["kind"], 0) + 1

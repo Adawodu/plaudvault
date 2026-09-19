@@ -76,6 +76,7 @@ def _cite(cfg: Config, row, store: Store) -> dict:
     """The identity of a recording as a client should see it."""
     t = store.triage_of(row["id"])
     k = store.kind_of(row["id"])
+    segs = store.segments(row["id"])
     speakers = [r["name"] for r in store.recording_speakers(row["id"]) if r["name"]]
     return {
         "recording_id": row["id"],
@@ -88,6 +89,9 @@ def _cite(cfg: Config, row, store: Store) -> dict:
         # citation should not expect commitments in it, and should not infer their
         # absence means the archive missed them.
         "kind": k["kind"] if k else "unclassified",
+        # A long recording can hold several unrelated conversations. An agent reading a
+        # citation from one should know the file is not all about that subject.
+        "conversations": len(segs) if len(segs) > 1 else 1,
         "speakers": speakers,
     }
 
@@ -272,7 +276,7 @@ def get_transcript(recording_id: str, from_time: str = "", to_time: str = "") ->
 
 
 @mcp.tool()
-def get_brief(recording_id: str) -> str:
+def get_brief(recording_id: str, segment: int = 0) -> str:
     """The actionable brief for a conversation that specified something to be built.
 
     Written for conversations classified `product`: what is being built and why, the
@@ -283,6 +287,10 @@ def get_brief(recording_id: str) -> str:
     Read `open` before acting. Acting on the decisions while unaware of the unresolved
     questions is the specific failure this document exists to prevent. If there is no
     brief, the conversation was not classified `product`; `get_recording` is the tool.
+
+    `segment` picks the conversation within a recording. A long recording can hold
+    several unrelated conversations and each gets its own brief; 0 is the whole
+    recording when it holds only one.
     """
     cfg = _cfg()
     with Store(cfg.db_path) as store:
@@ -292,9 +300,9 @@ def get_brief(recording_id: str) -> str:
         t = store.triage_of(recording_id)
         if not _visible(cfg, store, t["tier"] if t else None):
             return json.dumps({"error": "recording is outside this client's tier scope"})
-        path = brief_mod.brief_path(cfg, recording_id)
+        path = brief_mod.brief_path(cfg, recording_id, segment)
         if not path.exists():
-            k = store.kind_of(recording_id)
+            k = store.kind_of(recording_id, segment)
             return json.dumps({
                 "error": "no brief for this recording",
                 "kind": k["kind"] if k else "unclassified",
@@ -303,6 +311,7 @@ def get_brief(recording_id: str) -> str:
         return json.dumps(
             {
                 **_cite(cfg, row, store),
+                "segment": segment,
                 "brief": path.read_text(),
                 "edited_by_hand": brief_mod.was_edited(path),
             },

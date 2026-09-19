@@ -138,17 +138,17 @@ def test_a_human_can_change_their_own_mind(tmp_path):
     assert st.kind_of("r1")["kind"] == "working"
 
 
-def test_only_unclassified_recordings_are_queued(tmp_path):
+def test_only_unclassified_conversations_are_queued(tmp_path):
     st = _store(tmp_path / "m.sqlite", [("r1", None), ("r2", None)])
     st.set_kind("r1", kind="working", source="model")
-    assert [r["id"] for r in st.needing_kind()] == ["r2"]
+    assert [c["recording_id"] for c in st.needing_kind()] == ["r2"]
 
 
 def test_force_requeues_everything_but_still_protects_a_human(tmp_path):
     st = _store(tmp_path / "m.sqlite", [("r1", None), ("r2", None)])
     st.set_kind("r1", kind="personal", source="human")
     st.set_kind("r2", kind="working", source="model")
-    assert {r["id"] for r in st.needing_kind(force=True)} == {"r1", "r2"}
+    assert {c["recording_id"] for c in st.needing_kind(force=True)} == {"r1", "r2"}
     st.set_kind("r1", kind="media", source="model")
     assert st.kind_of("r1")["kind"] == "personal"
 
@@ -156,7 +156,7 @@ def test_force_requeues_everything_but_still_protects_a_human(tmp_path):
 def test_an_excluded_recording_is_never_queued(tmp_path):
     """`exclude` means out of the pipeline, not just out of the console."""
     st = _store(tmp_path / "m.sqlite", [("r1", "exclude"), ("r2", "local")])
-    assert [r["id"] for r in st.needing_kind()] == ["r2"]
+    assert [c["recording_id"] for c in st.needing_kind()] == ["r2"]
 
 
 # ------------------------------------------------- what extraction does with it

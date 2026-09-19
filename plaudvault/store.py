@@ -114,13 +114,17 @@ CREATE TABLE IF NOT EXISTS sentiment (
 -- expect from it. Derived from the summary and rebuildable, except where a human set
 -- it: `source` records who decided, and a re-run never overwrites a person.
 CREATE TABLE IF NOT EXISTS conversation_kinds (
-    recording_id TEXT PRIMARY KEY REFERENCES recordings(id),
+    recording_id TEXT NOT NULL REFERENCES recordings(id),
+    -- Which conversation inside the recording. 0 is the whole thing when the recording
+    -- has not been segmented, which is what it has always meant.
+    segment_idx  INTEGER NOT NULL DEFAULT 0,
     kind         TEXT NOT NULL,      -- see kinds.KINDS; a fixed vocabulary
     confidence   REAL,               -- 0..1, the model's own; 0 when it invented a kind
     why          TEXT,               -- the model's one-line reason, for the console
     source       TEXT NOT NULL DEFAULT 'model',   -- model | human
     model        TEXT,
-    decided_at   INTEGER NOT NULL
+    decided_at   INTEGER NOT NULL,
+    PRIMARY KEY (recording_id, segment_idx)
 );
 
 -- A conversation inside a recording. A pin left running all day produces one file
@@ -268,6 +272,33 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # a board can explain a cut in the model's own words rather than by silence.
     ("actions", "selection_note", "ALTER TABLE actions ADD COLUMN selection_note TEXT"),
     ("actions", "selection_rank", "ALTER TABLE actions ADD COLUMN selection_rank INTEGER"),
+    # Which conversation inside the recording this belongs to. 0 is the whole recording
+    # for an unsegmented one, which is exactly what every pre-existing row meant — so
+    # the default backfills the entire archive correctly with no data migration.
+    ("actions", "segment_idx", "ALTER TABLE actions ADD COLUMN segment_idx INTEGER DEFAULT 0"),
+    # conversation_kinds was keyed on recording_id alone. A recording holding three
+    # conversations has three kinds, so the key becomes (recording_id, segment_idx).
+    # SQLite cannot alter a primary key, so the table is rebuilt and every existing row
+    # lands on segment 0 — the whole recording, which is what it described.
+    ("conversation_kinds", "segment_idx", """
+        ALTER TABLE conversation_kinds RENAME TO conversation_kinds_old;
+        CREATE TABLE conversation_kinds (
+            recording_id TEXT NOT NULL REFERENCES recordings(id),
+            segment_idx  INTEGER NOT NULL DEFAULT 0,
+            kind         TEXT NOT NULL,
+            confidence   REAL,
+            why          TEXT,
+            source       TEXT NOT NULL DEFAULT 'model',
+            model        TEXT,
+            decided_at   INTEGER NOT NULL,
+            PRIMARY KEY (recording_id, segment_idx)
+        );
+        INSERT INTO conversation_kinds
+            (recording_id, segment_idx, kind, confidence, why, source, model, decided_at)
+            SELECT recording_id, 0, kind, confidence, why, source, model, decided_at
+            FROM conversation_kinds_old;
+        DROP TABLE conversation_kinds_old;
+    """),
 ]
 
 
@@ -286,7 +317,9 @@ class Store:
         for table, column, ddl in MIGRATIONS:
             cols = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
             if column not in cols:
-                self.db.execute(ddl)
+                # executescript rather than execute: some migrations are a table
+                # rebuild, which SQLite cannot express as a single ALTER.
+                self.db.executescript(ddl)
         self.db.commit()
 
     def close(self) -> None:
@@ -517,10 +550,46 @@ class Store:
             "ORDER BY r.started_at DESC"
         ).fetchall()
 
+    def conversations(self, *, include_excluded: bool = False,
+                      recording_id: str | None = None) -> list[dict]:
+        """Every conversation in the archive: one row per segment of every recording.
+
+        This is the working view. A recording that holds one conversation yields one
+        row, a recording holding four yields four, and the caller never has to know
+        which it was handed — an unsegmented recording is one segment covering the
+        whole file, so the shape is the same either way.
+
+        The library is still `all()`: the recordings as they came off the device. This
+        is the view over it, and it owns nothing — delete every segment row and this
+        returns exactly what `all()` does.
+        """
+        rows = [self.get(recording_id)] if recording_id else self.all()
+        out: list[dict] = []
+        for rec in rows:
+            if rec is None or not rec["transcript_path"]:
+                continue
+            if not include_excluded:
+                t = self.triage_of(rec["id"])
+                if t and t["tier"] == "exclude":
+                    continue
+            for sg in self.segments(rec["id"]):
+                out.append({
+                    "recording_id": rec["id"],
+                    "segment_idx": sg["idx"],
+                    "start_ms": sg["start_ms"],
+                    "end_ms": sg["end_ms"],
+                    "segmented": sg["source"] != "implicit",
+                    "recording": rec,
+                    "label": (rec["title"] or rec["filename"]) + (
+                        f" [{sg['idx'] + 1}]" if sg["source"] != "implicit" else ""),
+                })
+        return out
+
     # ------------------------------------------------- conversation kind
 
     def set_kind(self, rec_id: str, *, kind: str, confidence: float | None = None,
-                 why: str = "", source: str = "model", model: str | None = None) -> None:
+                 why: str = "", source: str = "model", model: str | None = None,
+                 segment_idx: int = 0) -> None:
         """Record what kind of conversation this is.
 
         A human's decision is final: a later model run must not quietly reclassify a
@@ -528,49 +597,48 @@ class Store:
         extraction runs at all and a silent flip changes what reaches the board.
         """
         if source != "human":
-            cur = self.kind_of(rec_id)
+            cur = self.kind_of(rec_id, segment_idx)
             if cur is not None and cur["source"] == "human":
                 return
         self.db.execute(
             """
-            INSERT INTO conversation_kinds (recording_id, kind, confidence, why, source,
-                                            model, decided_at)
-            VALUES (?,?,?,?,?,?,?)
-            ON CONFLICT(recording_id) DO UPDATE SET
+            INSERT INTO conversation_kinds (recording_id, segment_idx, kind, confidence,
+                                            why, source, model, decided_at)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(recording_id, segment_idx) DO UPDATE SET
                 kind = excluded.kind, confidence = excluded.confidence,
                 why = excluded.why, source = excluded.source,
                 model = excluded.model, decided_at = excluded.decided_at
             """,
-            (rec_id, kind, confidence, why, source, model, int(time.time())),
+            (rec_id, segment_idx, kind, confidence, why, source, model, int(time.time())),
         )
         self.db.commit()
 
-    def kind_of(self, rec_id: str) -> sqlite3.Row | None:
+    def kind_of(self, rec_id: str, segment_idx: int = 0) -> sqlite3.Row | None:
         return self.db.execute(
-            "SELECT * FROM conversation_kinds WHERE recording_id = ?", (rec_id,)
+            "SELECT * FROM conversation_kinds WHERE recording_id = ? AND segment_idx = ?",
+            (rec_id, segment_idx),
         ).fetchone()
 
-    def needing_kind(self, *, force: bool = False) -> list[sqlite3.Row]:
-        """Transcribed recordings with no kind yet — or all of them, keeping humans.
+    def needing_kind(self, *, force: bool = False) -> list[dict]:
+        """Conversations with no kind yet — or all of them, keeping humans.
+
+        Per conversation, not per recording: a file holding a standup and a school run
+        holds two kinds, and classifying the file as one of them is the mistake this
+        whole view exists to correct.
 
         `force` re-runs the model over everything, which is what a prompt change needs,
         but `set_kind` still refuses to overwrite a human, so a re-run cannot undo a
         sitting spent correcting it.
         """
-        q = (f"SELECT r.* FROM recordings r WHERE r.transcript_path IS NOT NULL "
-             f"AND {self.NOT_EXCLUDED} ")
-        if not force:
-            q += ("AND NOT EXISTS (SELECT 1 FROM conversation_kinds k "
-                  "WHERE k.recording_id = r.id) ")
-        return self.db.execute(q + "ORDER BY r.started_at DESC").fetchall()
+        return [c for c in self.conversations()
+                if force or self.kind_of(c["recording_id"], c["segment_idx"]) is None]
 
-    def by_kind(self, kind: str) -> list[sqlite3.Row]:
-        """Transcribed recordings of one conversation kind, newest first."""
-        return self.db.execute(
-            "SELECT r.* FROM recordings r JOIN conversation_kinds k ON k.recording_id = r.id "
-            f"WHERE k.kind = ? AND r.transcript_path IS NOT NULL AND {self.NOT_EXCLUDED} "
-            "ORDER BY r.started_at DESC", (kind,)
-        ).fetchall()
+    def by_kind(self, kind: str) -> list[dict]:
+        """Conversations of one kind, newest recording first."""
+        return [c for c in self.conversations()
+                if (k := self.kind_of(c["recording_id"], c["segment_idx"])) is not None
+                and k["kind"] == kind]
 
     def kind_counts(self) -> dict[str, int]:
         return {r["kind"]: r["n"] for r in self.db.execute(
@@ -637,7 +705,52 @@ class Store:
                     for i, sp in enumerate(spans)
                 ],
             )
+            # A kind the model inferred described the conversation as it was bounded
+            # then. Re-bounding the recording makes that claim about a conversation
+            # that no longer exists, and leaving it in place is worse than having none:
+            # it would sit on segment 0 looking current, and `needing_kind` would never
+            # queue the segment for a fresh look. A kind a person set is kept — D30 says
+            # a human's decision outranks a re-run, and they can change it themselves.
+            self.db.execute(
+                "DELETE FROM conversation_kinds WHERE recording_id = ? AND source != 'human'",
+                (rec_id,),
+            )
+        self._reattribute_actions(rec_id)
         return len(spans)
+
+    def _reattribute_actions(self, rec_id: str) -> int:
+        """Move existing actions to whichever conversation they were actually said in.
+
+        An action carries `at_ms`, the moment in the recording it was spoken, so
+        re-bounding a file does not lose their placement — it recovers it. Before
+        segmentation every action sat on segment 0 because the whole file was segment 0;
+        afterwards each belongs to the conversation containing its timestamp.
+
+        Nothing is deleted and no status is touched: an accepted action stays accepted,
+        it just stops being filed under the wrong conversation. An action with no
+        timestamp stays where it is, because a guess about where it belongs is worse
+        than an honest default.
+        """
+        rows = self.db.execute(
+            "SELECT idx, start_ms, end_ms FROM segments WHERE recording_id = ? ORDER BY idx",
+            (rec_id,),
+        ).fetchall()
+        if not rows:
+            return 0
+        moved = 0
+        with self.db:
+            for a in self.db.execute(
+                "SELECT id, at_ms FROM actions WHERE recording_id = ?", (rec_id,)
+            ).fetchall():
+                if a["at_ms"] is None:
+                    continue
+                for sg in rows:
+                    if sg["start_ms"] <= a["at_ms"] < sg["end_ms"]:
+                        self.db.execute("UPDATE actions SET segment_idx = ? WHERE id = ?",
+                                        (sg["idx"], a["id"]))
+                        moved += 1
+                        break
+        return moved
 
     def confirm_segments(self, rec_id: str) -> int:
         """Make this recording's segmentation precious. A re-run will not move it."""
@@ -647,9 +760,21 @@ class Store:
         return cur.rowcount
 
     def clear_segments(self, rec_id: str) -> int:
-        """Back to one conversation. Derived data only — the recording is untouched."""
-        cur = self.db.execute("DELETE FROM segments WHERE recording_id = ?", (rec_id,))
-        self.db.commit()
+        """Back to one conversation. Derived data only — the recording is untouched.
+
+        Everything attached to a conversation comes home with it. An action left
+        pointing at segment 3 of a recording that now has one conversation is
+        unreachable through the working view: present in the database, absent from every
+        board, and reported by nothing. Kinds on the vanished segments go too, except a
+        person's, which outranks a re-run here as everywhere else.
+        """
+        with self.db:
+            cur = self.db.execute("DELETE FROM segments WHERE recording_id = ?", (rec_id,))
+            self.db.execute(
+                "UPDATE actions SET segment_idx = 0 WHERE recording_id = ?", (rec_id,))
+            self.db.execute(
+                "DELETE FROM conversation_kinds WHERE recording_id = ? "
+                "AND segment_idx != 0 AND source != 'human'", (rec_id,))
         return cur.rowcount
 
     # ------------------------------------------------------------------ chunks
@@ -790,7 +915,8 @@ class Store:
     def actions(self, *, status: str | None = None, recording_id: str | None = None,
                 kind: str | None = None, owner: str | None = None,
                 since: int | None = None, until: int | None = None,
-                statuses: list[str] | None = None) -> list[sqlite3.Row]:
+                statuses: list[str] | None = None,
+                segment_idx: int | None = None) -> list[sqlite3.Row]:
         """The action board, filtered.
 
         `since`/`until` bound the **recording's** start, not `due_at`: "commitments in
@@ -807,6 +933,9 @@ class Store:
         if statuses:
             q += f" AND a.status IN ({','.join('?' * len(statuses))})"
             args.extend(statuses)
+        if segment_idx is not None:
+            q += " AND COALESCE(a.segment_idx, 0) = ?"
+            args.append(int(segment_idx))
         if recording_id:
             q += " AND a.recording_id = ?"
             args.append(recording_id)

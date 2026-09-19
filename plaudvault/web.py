@@ -106,7 +106,9 @@ def _rec_dto(cfg, store, r) -> dict:
         # What kind of conversation this is, and therefore how many actions it is
         # expected to yield. Shown beside the board so an empty one reads as "none
         # expected from a devotional" rather than as a failed extraction.
-        "kind": _kind_dto(store.kind_of(r["id"])),
+        # The card shows the first conversation's kind; the page breaks them out.
+        "kind": _kind_dto(store.kind_of(r["id"], 0)),
+        "conversations": len(store.segments(r["id"])),
         "started_iso": time.strftime("%Y-%m-%d %H:%M", time.localtime(r["started_at"])),
         "duration_min": round((r["duration_s"] or 0) / 60, 1),
         "tier": t["tier"] if t else None,
@@ -176,8 +178,27 @@ def recording(rec_id: str):
         dto["actions"] = [a for a in every if a["status"] != "overflow"]
         dto["overflow"] = [a for a in every if a["status"] == "overflow"]
 
-        bp = brief.brief_path(cfg, rec_id)
-        dto["brief"] = bp.read_text() if bp.exists() else ""
+        # One row per conversation in the file, each with its own kind, board and
+        # brief. A recording holding one conversation yields one row, so the shape the
+        # console renders never depends on whether a file was segmented.
+        dto["conversations"] = []
+        for sg in store.segments(rec_id):
+            k = store.kind_of(rec_id, sg["idx"])
+            bp = brief.brief_path(cfg, rec_id, sg["idx"])
+            dto["conversations"].append({
+                "idx": sg["idx"],
+                "start_ms": sg["start_ms"],
+                "end_ms": sg["end_ms"],
+                "source": sg["source"],
+                "method": sg["method"],
+                "kind": _kind_dto(k),
+                "brief": bp.read_text() if bp.exists() else "",
+                "actions": [a for a in dto["actions"]
+                            if (a.get("segment_idx") or 0) == sg["idx"]],
+                "overflow": [a for a in dto["overflow"]
+                             if (a.get("segment_idx") or 0) == sg["idx"]],
+            })
+        dto["segmented"] = store.is_segmented(rec_id)
         return dto
 
 

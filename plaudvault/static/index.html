@@ -1162,8 +1162,41 @@ async function setTier(tier){
   await openRec(CUR.id);
 }
 
+function hhmm(ms){ const t=Math.floor(ms/1000); return `${Math.floor(t/3600)}:${String(Math.floor(t%3600/60)).padStart(2,'0')}`; }
+
+// A recording holding several conversations gets one board per conversation. Rendered
+// as sections rather than as one list because the whole point of the working view is
+// that a standup and a school run in the same file are not one thing — a single board
+// over both is the view this replaced.
 function renderRecActions(){
-  const list = CUR.actions||[], cut = CUR.overflow||[], k = CUR.kind;
+  const convs = CUR.conversations || [];
+  if (CUR.segmented && convs.length > 1){
+    $('#recActions').innerHTML = convs.map((c, i) => {
+      const k = c.kind;
+      const chip = k ? `<span class="chip" title="${esc(k.why||'')}">${esc(k.kind)} · budget ${k.budget}</span>`
+                     : '<span class="chip">unclassified</span>';
+      let body;
+      if (k && !k.extractable)
+        body = `<div class="empty" style="padding:16px">No actions expected — a <b>${esc(k.kind)}</b> conversation.</div>`;
+      else if (!c.actions.length)
+        body = `<div class="empty" style="padding:16px">Nothing proposed from this conversation.</div>`;
+      else
+        body = c.actions.map(actionCard).join('');
+      return `<div style="margin:18px 0 6px">
+          <div class="row spread">
+            <h4 style="margin:0">Conversation ${i+1}
+              <span class="faint mono" style="font-weight:400">${hhmm(c.start_ms)}–${hhmm(c.end_ms)}</span></h4>
+            ${chip}
+          </div>
+          ${body}
+          ${overflowBlock(c.overflow, k)}
+          ${c.brief ? `<details style="margin-top:8px"><summary class="faint" style="cursor:pointer">brief</summary>
+             <pre style="white-space:pre-wrap">${esc(c.brief)}</pre></details>` : ''}
+        </div>`;
+    }).join('');
+    return;
+  }
+  const list = CUR.actions||[], cut = CUR.overflow||[], k = (convs[0]||{}).kind || CUR.kind;
   // An empty board means three different things, and saying which is the whole
   // difference between a tool that looks broken and one that made a decision.
   let empty = 'No actions yet. Run <span class="mono">plaudctl extract</span> to propose some.';

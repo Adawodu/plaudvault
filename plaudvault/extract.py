@@ -16,6 +16,7 @@ import time
 
 from . import kinds as kinds_mod
 from . import llm as llm_mod
+from . import segment as segment_mod
 from . import select as select_mod
 from .config import Config
 from .llm import available
@@ -234,10 +235,10 @@ def run(
     less text buys more. `cloud_select` sends only the candidate list and the summary,
     never the transcript.
     """
-    rows = store.all() if force else [
-        r for r in store.all() if r["transcript_path"] and not r["extracted_at"]
-    ]
-    rows = [r for r in rows if r["transcript_path"]]
+    # The working view: one conversation per row, so a file holding four of them is
+    # scanned four times with four budgets rather than once with one.
+    rows = [c for c in store.conversations()
+            if force or not c["recording"]["extracted_at"]]
     if limit:
         rows = rows[:limit]
 
@@ -249,19 +250,36 @@ def run(
     select_cfg = llm_mod.with_cloud(cfg) if cloud_select else cfg
     want = cfg.extract_suggestions if suggestions is None else suggestions
     scope = "commitments and suggestions" if want else "commitments"
-    print(f"  {len(rows)} recordings to scan for {scope} · {cfg.llm_label}")
+    print(f"  {len(rows)} conversations to scan for {scope} · {cfg.llm_label}")
     if cloud_select:
         print(f"  choosing with {select_cfg.llm_label} — candidates and summary only, "
               f"tiers {sorted(llm_mod.cloud_tiers(cfg)) or 'none'}")
 
-    for i, row in enumerate(rows, 1):
-        text = read_transcript(cfg, row["id"])
+    # `extracted_at` is a clock on the RECORDING, and extraction is now per
+    # conversation. Stamping it when the first of four segments finishes would mark the
+    # whole file done and silently skip the other three on the next run — so the clock
+    # is set only once every segment of that recording has been handled in this pass.
+    handled: dict[str, set[int]] = {}
+    expected = {r["recording_id"]: len(store.segments(r["recording_id"])) for r in rows}
+
+    def _mark(conv: dict) -> None:
+        done = handled.setdefault(conv["recording_id"], set())
+        done.add(conv["segment_idx"])
+        if len(done) >= expected.get(conv["recording_id"], 1):
+            store.update(conv["recording_id"], extracted_at=int(time.time()))
+
+    for i, conv in enumerate(rows, 1):
+        row = conv["recording"]
+        # The transcript of *this conversation*, read out of the master. Nothing on
+        # disk is cut: an unsegmented recording returns the whole document.
+        text = segment_mod.transcript_for(
+            read_transcript(cfg, row["id"]), conv["start_ms"], conv["end_ms"])
         if not text.strip():
             continue
         # What kind of conversation this is decides whether to ask at all. Asking a
-        # devotional or a played-back podcast "what commitments are here?" fifteen
-        # times, once per chunk, is how one prayer produced 69 action items.
-        k = store.kind_of(row["id"])
+        # played-back podcast "what commitments are here?" fifteen times, once per
+        # chunk, is how one recording produced 69 action items.
+        k = store.kind_of(row["id"], conv["segment_idx"])
         kind = k["kind"] if k else None
         if k is None:
             # Not classified is not the same as no actions expected. Extracting
@@ -269,16 +287,17 @@ def run(
             # difference between two recordings on the same board.
             stats["unclassified"] += 1
         elif not kinds_mod.extractable(kind):
-            store.update(row["id"], extracted_at=int(time.time()))
+            _mark(conv)
             stats["not_expected"] += 1
-            print(f"  [{i}/{len(rows)}] {row['filename'][:60]} — {kind}, "
+            print(f"  [{i}/{len(rows)}] {conv['label'][:60]} — {kind}, "
                   f"no actions expected")
             continue
-        print(f"  [{i}/{len(rows)}] {row['filename'][:60]} ...", flush=True)
+        print(f"  [{i}/{len(rows)}] {conv['label'][:60]} ...", flush=True)
         try:
             existing = {
                 re.sub(r"[^a-z0-9 ]", "", a["text"].lower())[:60]
-                for a in store.actions(recording_id=row["id"])
+                for a in store.actions(recording_id=row["id"],
+                                       segment_idx=conv["segment_idx"])
             }
             _t = store.triage_of(row['id'])
             tier = _t['tier'] if _t else None
@@ -292,19 +311,26 @@ def run(
             # over-produces by design; this is the one call per recording that spends
             # the budget, and it can see every candidate at once.
             sp = summary_path(cfg, row["id"])
+            # A segment has no summary of its own, so it is described by its own
+            # opening rather than by a summary of the whole file — which, for a
+            # recording holding four conversations, describes none of them.
+            context = (sp.read_text() if sp.exists() and not conv["segmented"]
+                       else text[:2500])
             chosen = select_mod.choose(
                 select_cfg, fresh,
-                summary=sp.read_text() if sp.exists() else "",
+                summary=context,
                 kind=kind or "other",
                 budget=kinds_mod.budget(kind),
                 tier=tier,
             )
             for item in chosen["kept"]:
-                store.add_action(recording_id=row["id"], **item)
+                store.add_action(recording_id=row["id"],
+                                 segment_idx=conv["segment_idx"], **item)
             for item in chosen["overflow"]:
-                store.add_action(recording_id=row["id"], status="overflow", **item)
+                store.add_action(recording_id=row["id"], status="overflow",
+                                 segment_idx=conv["segment_idx"], **item)
 
-            store.update(row["id"], extracted_at=int(time.time()))
+            _mark(conv)
             stats["recordings"] += 1
             stats["proposed"] += len(chosen["kept"])
             stats["overflow"] += len(chosen["overflow"])

@@ -189,10 +189,13 @@ def cmd_kinds(args, cfg) -> int:
             if row is None:
                 print(f"  no such recording: {rec_id}")
                 return 2
-            store.set_kind(rec_id, kind=kind, confidence=1.0, why="set by hand",
-                           source="human")
-            print(f"  {row['title'] or row['filename']} → {kind} "
-                  f"(budget {kinds.budget(kind)})")
+            seg = int(getattr(args, "segment", 0) or 0)
+            store.set_kind(rec_id, segment_idx=seg, kind=kind, confidence=1.0,
+                           why="set by hand", source="human")
+            label = row["title"] or row["filename"]
+            if store.is_segmented(rec_id):
+                label += f" [conversation {seg + 1}]"
+            print(f"  {label} → {kind} (budget {kinds.budget(kind)})")
             return 0
 
         if args.list:
@@ -333,7 +336,7 @@ def cmd_brief(args, cfg) -> int:
     """Write an actionable brief for conversations that specified something."""
     with Store(cfg.db_path) as store:
         if args.show:
-            path = brief.brief_path(cfg, args.show)
+            path = brief.brief_path(cfg, args.show, int(getattr(args, "segment", 0) or 0))
             if not path.exists():
                 print(f"  no brief for {args.show}")
                 return 2
@@ -1109,6 +1112,8 @@ def main(argv=None) -> int:
     sp.add_argument("--force", action="store_true",
                     help="rewrite generated briefs (hand-edited ones are still kept)")
     sp.add_argument("--show", metavar="RECORDING_ID", help="print one brief")
+    sp.add_argument("--segment", type=int, default=0,
+                    help="which conversation inside the recording (default 0)")
     sp.add_argument("--cloud", action="store_true",
                     help="write with cloud_model — sends the transcript, so only tiers "
                          "in cloud_tier_scope are written")
@@ -1141,6 +1146,8 @@ def main(argv=None) -> int:
     sp.add_argument("--list", action="store_true", help="show the breakdown, classify nothing")
     sp.add_argument("--set", nargs=2, metavar=("RECORDING_ID", "KIND"),
                     help="set a kind by hand; a model run will never overwrite it")
+    sp.add_argument("--segment", type=int, default=0,
+                    help="which conversation inside the recording (default 0)")
 
     sub.choices["extract"].add_argument(
         "--cloud", action="store_true",

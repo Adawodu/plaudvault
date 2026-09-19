@@ -58,6 +58,7 @@ import time
 from pathlib import Path
 
 from . import llm as llm_mod
+from . import segment as segment_mod
 from .config import Config
 from .llm import available
 from .store import Store
@@ -127,8 +128,15 @@ PARTIAL BRIEFS:
 """
 
 
-def brief_path(cfg: Config, rec_id: str) -> Path:
-    return cfg.brief_dir / f"{rec_id}.md"
+def brief_path(cfg: Config, rec_id: str, segment_idx: int = 0) -> Path:
+    """One brief per conversation, not per file.
+
+    The segment is in the filename rather than only in the database, so a directory of
+    briefs is still legible on its own — these are documents meant to be copied and
+    handed on, and a name that needs a database to interpret is a name that stops
+    meaning anything the moment it travels.
+    """
+    return cfg.brief_dir / f"{rec_id}.s{segment_idx}.md"
 
 
 def was_edited(path: Path) -> bool:
@@ -191,10 +199,12 @@ def run(cfg: Config, store: Store, *, limit: int | None = None,
     # Confirmed by a person, not merely proposed by the classifier. See the module
     # docstring: this is the same acceptance gate that stands between a proposed action
     # and a dispatched one, applied to a higher-consequence artifact.
-    rows = [r for r in store.by_kind("product")
-            if (k := store.kind_of(r["id"])) is not None and k["source"] == "human"]
+    rows = [c for c in store.by_kind("product")
+            if (k := store.kind_of(c["recording_id"], c["segment_idx"])) is not None
+            and k["source"] == "human"]
     if not force:
-        rows = [r for r in rows if not brief_path(cfg, r["id"]).exists()]
+        rows = [c for c in rows
+                if not brief_path(cfg, c["recording_id"], c["segment_idx"]).exists()]
     if limit:
         rows = rows[:limit]
 
@@ -204,23 +214,26 @@ def run(cfg: Config, store: Store, *, limit: int | None = None,
     if cloud:
         print(f"  transcripts will be sent — tiers {sorted(llm_mod.cloud_tiers(cfg)) or 'none'}")
 
-    for i, row in enumerate(rows, 1):
-        path = brief_path(cfg, row["id"])
+    for i, conv in enumerate(rows, 1):
+        row = conv["recording"]
+        path = brief_path(cfg, row["id"], conv["segment_idx"])
         if was_edited(path):
             # A brief is meant to be corrected by hand. Overwriting that is the one
             # thing this must never do, even with --force.
             stats["kept"] += 1
-            print(f"  [{i}/{len(rows)}] {row['filename'][:56]} — edited by hand, kept")
+            print(f"  [{i}/{len(rows)}] {conv['label'][:56]} — edited by hand, kept")
             continue
-        text = read_transcript(cfg, row["id"])
+        # This conversation's own transcript, read out of the master document.
+        text = segment_mod.transcript_for(
+            read_transcript(cfg, row["id"]), conv["start_ms"], conv["end_ms"])
         if not text.strip():
             continue
-        print(f"  [{i}/{len(rows)}] {row['filename'][:56]} ...", flush=True)
+        print(f"  [{i}/{len(rows)}] {conv['label'][:56]} ...", flush=True)
         try:
             t = store.triage_of(row["id"])
             md = write_brief(
                 write_cfg, text,
-                title=row["title"] or row["filename"],
+                title=conv["label"],
                 when=time.strftime("%Y-%m-%d %H:%M", time.localtime(row["started_at"])),
                 tier=(t["tier"] if t else None),
             )

@@ -90,13 +90,10 @@ def _pending(store: Store, cfg: Config) -> list[dict]:
             # is extracted without a budget, which is the old behaviour rather than the
             # intended one.
             "stage": "kinds",
-            "count": store.db.execute(
-                "SELECT COUNT(*) FROM recordings r WHERE r.transcript_path IS NOT NULL "
-                "AND r.summary_path IS NOT NULL "
-                "AND NOT EXISTS (SELECT 1 FROM conversation_kinds k "
-                "                WHERE k.recording_id = r.id) "
-                f"AND {store.NOT_EXCLUDED}"
-            ).fetchone()[0],
+            # Counted per conversation, not per recording: a file holding four of
+            # them needs four kinds, and reporting the file as done when one is
+            # classified would hide three conversations from the queue.
+            "count": len(store.needing_kind()),
             "label": "classified by conversation kind",
             "fix": "plaudctl kinds",
         },
@@ -112,8 +109,9 @@ def _pending(store: Store, cfg: Config) -> list[dict]:
             # that nothing was briefed.
             "stage": "brief",
             "count": sum(
-                1 for r in store.by_kind("product")
-                if not (cfg.brief_dir / f"{r['id']}.md").exists()
+                1 for c in store.by_kind("product")
+                if not (cfg.brief_dir
+                        / f"{c['recording_id']}.s{c['segment_idx']}.md").exists()
             ),
             "label": "briefed (product conversations)",
             "fix": "plaudctl brief",
