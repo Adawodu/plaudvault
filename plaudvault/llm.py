@@ -5,11 +5,26 @@ exists. `openai` targets any OpenAI-compatible /chat/completions endpoint: LM St
 llama.cpp's server, vLLM, OpenRouter, Groq, or OpenAI itself. Choosing a hosted one
 sends transcript text to that provider; the console says so plainly rather than
 letting you forget.
+
+**Locality is a property of where the model runs, not of which port you dialled.** That
+distinction used to be free and is not any more. Ollama's hosted models are addressed
+*through the local daemon* — you pull `gpt-oss:120b-cloud`, post it to
+`127.0.0.1:11434` exactly like any other model, and the daemon forwards the prompt to
+Ollama's servers. An address check alone therefore reports "nothing leaves this
+machine" while a therapy session is in flight, and `remote_allowed()` waves every tier
+through because it believes the provider is local. That is precisely the failure D27
+exists to prevent, arriving through the one door D27 did not watch.
+
+So a cloud-suffixed model name makes the provider remote regardless of the host, and the
+tier scope applies to it like any other hosted endpoint. The detection is deliberately
+broad: a model wrongly treated as remote costs one line of configuration, and a model
+wrongly treated as local costs a conversation you cannot take back.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 import httpx
 
@@ -23,12 +38,36 @@ class LLMError(RuntimeError):
     pass
 
 
+# Ollama names its hosted models with a `cloud` suffix — `gpt-oss:120b-cloud`,
+# `deepseek-v3.1:671b-cloud`, `qwen3-coder:480b-cloud`. Anchored to a separator so a
+# model that merely contains the word (`cloudburst`) is not caught.
+_CLOUD_MODEL = re.compile(r"(?:^|[:\-])cloud$")
+
+
+def model_is_cloud(model: str | None) -> bool:
+    """Is this Ollama model actually executed on Ollama's servers?
+
+    The local daemon proxies these, so nothing about the request's address reveals it.
+    The name is the only signal available before the prompt is already gone.
+    """
+    return bool(_CLOUD_MODEL.search((model or "").strip().lower()))
+
+
+def _addr_is_local(host: str) -> bool:
+    return "127.0.0.1" in host or "localhost" in host or "::1" in host
+
+
 def is_local(cfg: Config) -> bool:
-    """True when no transcript text leaves this machine."""
+    """True when no transcript text leaves this machine.
+
+    Both halves matter: a local address running a cloud-proxied model is remote, and so
+    is a remote address running anything.
+    """
     if cfg.llm_provider == "ollama":
-        return "127.0.0.1" in cfg.ollama_host or "localhost" in cfg.ollama_host
-    host = cfg.openai_base_url
-    return "127.0.0.1" in host or "localhost" in host
+        if model_is_cloud(cfg.ollama_model):
+            return False
+        return _addr_is_local(cfg.ollama_host)
+    return _addr_is_local(cfg.openai_base_url)
 
 
 def available(cfg: Config) -> tuple[bool, str]:
@@ -92,8 +131,10 @@ def generate(cfg: Config, prompt: str, *, temperature: float = 0.2, timeout: flo
              tier: str | None = None) -> str:
     if not remote_allowed(cfg, tier):
         scope = cloud_tiers(cfg)
+        where = (f"Ollama's cloud ({cfg.ollama_model})"
+                 if cfg.llm_provider == "ollama" else cfg.openai_base_url)
         raise RemoteNotPermitted(
-            f"tier {tier or 'unknown'!r} may not be sent to {cfg.openai_base_url} — "
+            f"tier {tier or 'unknown'!r} may not be sent to {where} — "
             + (f"cloud_tier_scope allows {sorted(scope)}" if scope
                else "cloud_tier_scope is empty, so no recording may leave this machine")
         )
@@ -131,3 +172,29 @@ def generate(cfg: Config, prompt: str, *, temperature: float = 0.2, timeout: flo
         out = choices[0].get("message", {}).get("content", "")
 
     return _THINK.sub("", out or "").strip()
+
+
+def with_cloud(cfg: Config) -> Config:
+    """The same config pointed at `cloud_model`, for one step of one run.
+
+    On-demand rather than configured-on, because the two calls worth a large model —
+    choosing which commitments survive, and writing a brief an agent will act on — are a
+    handful per run, while summarising and extracting are hundreds. Switching the whole
+    provider to buy quality on the few would send the many.
+
+    Nothing about safety is special-cased here. The returned config is remote by the
+    ordinary rules, so `remote_allowed()` consults `cloud_tier_scope` for every
+    recording exactly as it would for any hosted endpoint, and a tier outside that scope
+    raises rather than quietly falling back to the local model — a silent downgrade
+    would mean two different models wrote the same board with nothing saying which.
+    """
+    if not cfg.cloud_model:
+        raise LLMError(
+            "cloud_model is not set. Add it to your config, together with the tiers it "
+            "may see:\n"
+            '    cloud_model = "gpt-oss:120b-cloud"\n'
+            '    cloud_tier_scope = "stack"'
+        )
+    if model_is_cloud(cfg.cloud_model):
+        return replace(cfg, llm_provider="ollama", ollama_model=cfg.cloud_model)
+    return replace(cfg, llm_provider="openai", openai_model=cfg.cloud_model)

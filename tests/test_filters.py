@@ -21,9 +21,9 @@ T0 = int(time.mktime((2026, 3, 10, 9, 0, 0, 0, 0, -1)))
 
 def _seed(db):
     st = Store(db)
-    for i, (rid, offset, tier) in enumerate([
+    for rid, offset, tier in [
         ("mar1", 0, "stack"), ("mar2", 2 * DAY, "local"), ("apr1", 30 * DAY, "stack"),
-    ]):
+    ]:
         st.db.execute("INSERT INTO recordings (id, filename, started_at, duration_s) VALUES (?,?,?,?)",
                       (rid, rid, T0 + offset, 600.0))
         if tier:
@@ -132,5 +132,71 @@ def test_a_local_provider_is_never_gated():
     class Local(_Cfg):
         llm_provider = "ollama"
         ollama_host = "http://127.0.0.1:11434"
+        ollama_model = "qwen3:latest"
     assert llm.remote_allowed(Local(), None) is True
     assert llm.remote_allowed(Local(), "local") is True
+
+
+# ------------------------------------------- a local address is not locality
+
+class _Ollama:
+    llm_provider = "ollama"
+    ollama_host = "http://127.0.0.1:11434"
+    ollama_model = "qwen3:latest"
+    cloud_tier_scope = ""
+    openai_base_url = "http://127.0.0.1:1234/v1"
+
+
+def test_a_cloud_model_served_through_localhost_is_not_local():
+    """Ollama's hosted models are pulled and then addressed at 127.0.0.1 like any
+    other — the daemon forwards the prompt to Ollama's servers. An address check alone
+    reports "nothing leaves this machine" while a therapy session is in flight."""
+    cfg = _Ollama()
+    assert llm.is_local(cfg) is True
+    cfg.ollama_model = "gpt-oss:120b-cloud"
+    assert llm.is_local(cfg) is False
+
+
+def test_a_cloud_model_is_gated_by_the_tier_scope_like_any_other_provider():
+    """The point of fixing is_local: D27's machinery then works unchanged."""
+    cfg = _Ollama()
+    cfg.ollama_model = "deepseek-v3.1:671b-cloud"
+    assert llm.remote_allowed(cfg, "stack") is False      # empty scope: nothing leaves
+    cfg.cloud_tier_scope = "stack"
+    assert llm.remote_allowed(cfg, "stack") is True
+    assert llm.remote_allowed(cfg, "local") is False
+    assert llm.remote_allowed(cfg, None) is False
+
+
+def test_generate_refuses_a_cloud_model_outside_the_scope():
+    cfg = _Ollama()
+    cfg.ollama_model = "gpt-oss:120b-cloud"
+    cfg.cloud_tier_scope = "stack"
+    with pytest.raises(llm.RemoteNotPermitted) as exc:
+        llm.generate(cfg, "hello", tier="local")
+    assert "Ollama's cloud" in str(exc.value)
+
+
+def test_cloud_detection_needs_a_separator_not_a_substring():
+    """Broad enough to catch the naming convention, narrow enough not to refuse a
+    local model that merely contains the word."""
+    for name in ("gpt-oss:120b-cloud", "qwen3-coder:480b-cloud", "qwen3:cloud"):
+        assert llm.model_is_cloud(name), name
+    for name in ("qwen3:latest", "cloudburst:7b", "nimbuscloud", "", None):
+        assert not llm.model_is_cloud(name), name
+
+
+def test_indexing_refuses_a_hosted_embedding_model():
+    """Every other call handles one recording and can be gated by its tier. Indexing
+    sends every sentence in the archive in one sweep — there is no tier scope that
+    makes that proportionate."""
+    from plaudvault import search
+
+    class _Cfg2:
+        embed_model = "some-embed:cloud"
+        ollama_host = "http://127.0.0.1:11434"
+
+    ok, why = search.available(_Cfg2())
+    assert ok is False and "every sentence" in why
+    with pytest.raises(search.EmbedError):
+        search.embed(_Cfg2(), ["text"])
