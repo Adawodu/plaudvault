@@ -55,6 +55,7 @@ most of the properties an orchestrator is adopted to provide:
 | Data-quality gate | `freshness.report()` | `freshness.py` |
 | Backfill | `--force`, per stage | CLI |
 | Access control | `tier`, enforced by what exists on disk | `tiering.py` |
+| Master/derived split | library (`recordings`) vs working view (`conversations()`) | `store.py` |
 
 Two of those are better than what most production systems have, and they are worth
 naming explicitly because they are the transferable part:
@@ -69,6 +70,34 @@ stage instead of a rewrite. An imperative DAG would have had to be re-architecte
 it. Changing the embedding model re-indexes rather than silently mixing two vector
 spaces. This is model lineage, and it is the thing most teams discover they need after
 an incident rather than before.
+
+**A view over an immutable master, rather than a transformation of it.** The unit a
+recorder produces — a file — is not the unit anything downstream wants. A pin left
+running all day yields one file holding several unrelated conversations, and a title,
+a summary, a tone reading and a task budget are all per-conversation and all wrong for
+it. The obvious move is to split the file; this system refuses to, because the audio and
+its verification facts are the one thing here that cannot be rebuilt.
+
+Instead `segments` holds time ranges and `conversations()` projects them, so the working
+unit is derived and the master is untouched — delete every segment row and the archive is
+byte-for-byte what it was. Three properties make that safe rather than merely clever, and
+they generalise past this archive:
+
+1. **The degenerate case is the default.** An unsegmented recording *is* one segment
+   covering the whole file, computed and never stored. No caller branches on which world
+   it is in, and no existing row needed backfilling when the concept arrived — because
+   every one of them already described "the whole recording", which is what segment 0 is.
+2. **Proposed boundaries are derived; confirmed ones are precious.** Every decision
+   downstream hangs off a boundary, so a re-run that silently moved one would orphan all
+   of them with nothing recording when. The same rule governs speaker names and
+   conversation kinds.
+3. **Re-bounding recovers placement rather than losing it.** Actions carry the moment
+   they were spoken, so a new segmentation re-attributes them by timestamp. A derived
+   view can be rebuilt precisely because the facts under it were never edited.
+
+The failure this prevents is not hypothetical: retrieval context windows were stitching
+neighbouring chunks across a boundary in 56 places, handing a model two unrelated
+conversations as continuous speech.
 
 ---
 

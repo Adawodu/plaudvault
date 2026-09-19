@@ -221,8 +221,18 @@ Two views over one master:
 | **Library** | every recording as it arrived — the source of truth, never reorganised |
 | **Working view** | the conversations inside them, where titles, kinds, budgets, actions and briefs belong |
 
-On the reference archive: 94 recordings in the library, 20 of which hold more than one
-conversation — 126 conversations in the working view.
+On the reference archive: 97 recordings in the library, 20 of which hold more than one
+conversation — 124 conversations in the working view.
+
+**The whole pipeline runs per conversation.** `kinds`, `extract` and `brief` each work on
+one conversation at a time, so a file holding a standup and a school run gets two kinds,
+two budgets, two boards and, where it earns one, two briefs. One real recording resolves
+into an interview (budget 1), a personal conversation (budget 2) and a podcast playing
+(budget 0 — never extracted at all). Before, all three shared one kind and one budget.
+
+Actions remember which conversation they came from, and re-segmenting a recording
+**re-attributes them by their timestamp** rather than losing their placement. Clearing a
+segmentation brings them home. Nothing is ever stranded in the database on no board.
 
 A recording with no segmentation **is** one segment covering the whole file. That is not
 a special case; it is what an unsegmented recording has always meant, so every existing
@@ -244,6 +254,16 @@ open a boundary on its own.
 Duration alone does not make a conversation either: a span with under a minute of actual
 speech is folded into the one before it, because two long silences in a row leave a
 sliver of dead air that duration calls a conversation and the audio does not.
+
+Search respects the boundaries too. `--context` stitches a hit to its neighbours, and on
+a segmented file the chunk next door can belong to a different discussion — 56 such
+windows existed here before this was fixed. A window never crosses a conversation now,
+because handing a model two unrelated conversations as continuous speech is a more
+confident kind of wrong than giving it no context at all.
+
+**Still one-per-file, honestly:** summaries, titles, tone and the search index. On the 20
+multi-conversation recordings that means a summary averaging several conversations and a
+title naming one of them. Coarse rather than wrong, and the next piece of work.
 
 What silence cannot catch is one conversation ending and the next starting with no pause
 — a change of subject, visible only in what was said. That needs a model reading the
@@ -957,8 +977,9 @@ regardless of the address it is dialled at.
 
 ```bash
 pip install -e '.[dev]'
-pytest                  # ~140 tests, under a second
-ruff check plaudvault tests
+pytest                  # ~280 tests, a second or two
+ruff check plaudvault tests scripts
+python scripts/render-diagrams.py
 ```
 
 The suite needs **no network, no Ollama and no archive** — every test builds its own
@@ -970,6 +991,11 @@ quote actually appears in its transcript, filters applied before ranking rather 
 after, and the stitching behind `--context`. Those are the behaviours where a regression
 looks exactly like a correct answer. `web.py`, `cli.py` and `story.py` have no tests;
 changes there are checked by running them.
+
+The diagrams are built, not exported. `python scripts/render-diagrams.py` renders
+`docs/diagrams/*.excalidraw` to PNG, so a picture cannot quietly stop describing the
+schema it claims to. They were hand-exported once, which is fine once and a liability
+forever.
 
 The linter's rule set is deliberately narrow — unused imports, shadowed names, obvious
 bug shapes — because this codebase argues for itself in prose and a linter with opinions

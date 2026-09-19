@@ -817,6 +817,90 @@ pause. That is a change of subject, visible only in what was said, and for a thr
 recording it needs a model that can hold the whole transcript at once — which is what
 D35's `cloud_model` and the `num_ctx` fix exist for. Not built yet.
 
+### D37 — The pipeline runs per conversation, and the review that followed
+D36 built the working view and nothing consumed it: `kinds`, `extract` and `brief` still
+asked one question of a file holding four conversations. A conversation is
+`(recording_id, segment_idx)`, `store.conversations()` is the view, and all three now
+iterate it.
+
+**The migration was free because segment 0 already meant the right thing.**
+`conversation_kinds` is re-keyed on `(recording_id, segment_idx)` — SQLite cannot alter
+a primary key, so the table is rebuilt — and `actions` gains `segment_idx` defaulting to
+0. Every pre-existing row described the whole recording, which is exactly what segment 0
+of an unsegmented recording is. Verified on the live archive: 97 recordings, 982 actions,
+74 kinds, 1564 events, all preserved, no temporary table left behind.
+
+Three defects surfaced while wiring it, each caught by writing the test rather than by
+reading the code:
+
+*The recording clock.* `extracted_at` is a column on the recording. Stamping it when the
+first of four conversations finished marked the whole file done and skipped the other
+three on the next run. It is now set only once every conversation in that recording has
+been handled in the pass.
+
+*Stale kinds.* A kind the model inferred described the conversation as it was bounded
+then. Re-bounding the file makes that claim about a conversation that no longer exists —
+and leaving it is worse than having none, because it sits on segment 0 looking current
+while `needing_kind` never queues that segment again. Model-set kinds are dropped when a
+segmentation changes; a person's is kept (D30).
+
+*Orphaned actions.* `clear_segments` left actions pointing at segments that no longer
+existed: in the database, on no board, reported by nothing. They come home to segment 0
+now, and when a segmentation is *created* they are re-attributed by `at_ms` — which
+recovers their placement rather than losing it. On the live archive that spread 982
+actions as 770 / 184 / 18 / 10 across conversations with zero orphans.
+
+**Measured end to end.** One recording now resolves into an interview (budget 1), a
+personal conversation (budget 2) and a podcast playing (budget 0, never extracted).
+Before, all three were one kind with one budget.
+
+#### What the end-to-end review found
+
+*A context window could cross a conversation boundary.* Chunks are cut at 1200
+characters with no idea where a conversation ends, so on a segmented file the neighbours
+of a hit near a boundary belong to a different discussion — **56 such windows** on this
+archive. B4 would have stitched them into continuous prose for a model to answer from,
+which is a more confident kind of wrong than no context at all. `chunk_window` clamps to
+the conversation containing the hit; an unsegmented recording windows freely as before,
+and a chunk with no timestamp keeps its neighbours rather than silently losing them.
+
+*The judge was still pooling per file.* It sampled every action of a recording and scored
+selection against one kind and one budget — measuring a board no version of this product
+shows anybody. Sampling and measurement are both per conversation now. This mattered more
+than the others: it is the instrument.
+
+*The tier scope bounded reading but not writing.* An audit of all eleven MCP tools found
+`propose_action` was the one archive access with no tier check. Nothing leaked — it is a
+write — but a client scoped to `stack` could attach a proposal to a `local` recording's
+board. "Proposals are harmless" is not the argument: the board is the owner's, and an
+entry referencing a conversation the client was never shown is a scope violation
+whichever way the data moved.
+
+*A script could not parse on the Python this project claims to support.*
+`scripts/sync-docs.py` — which the post-commit hook runs on every commit — used a
+backslash inside an f-string expression, a syntax error before 3.12, while
+`requires-python` says 3.11. It worked because the machine it ran on has 3.13, and
+nothing caught it because CI linted `plaudvault` and `tests` and not `scripts`. Both
+fixed; the same file also had a lambda closing over a loop variable, which would have
+substituted the last block's body into every block.
+
+*The diagrams were hand-exported and could not be checked.* `scripts/render-diagrams.py`
+renders `.excalidraw` to PNG with Pillow, so the picture is a build artifact of the
+source rather than a memory of it. Deliberately small — it draws the element types these
+diagrams use and nothing else, because the alternative was a headless Chromium to
+reproduce a hand-drawn stroke style that carries no information.
+
+**Measured cost, accepted for now.** `conversations()` is N+1: 260 queries for 124
+conversations, 28 ms. That is a tenth of a single embedding call and it is the same
+brute-force trade as D7 — revisit at roughly ten times this corpus, where it becomes a
+few hundred milliseconds on a page load.
+
+**Still per file, and honestly so.** Summaries, titles, tone and the search index are
+one-per-recording. On the 20 multi-conversation recordings that means 18 summaries
+averaging several conversations, 18 titles naming one of them, and hits that cite the
+file rather than the conversation. None of that is wrong today; all of it is coarse, and
+it is the next piece of work rather than a defect in this one.
+
 ### D14 — qwen3:8b, not the largest model available
 `qwen3.8` (27.3B, Q4_K_M, 17.7 GB) was pulled and **cannot load** on a 24 GB machine:
 5m04s of thrashing, swap climbing, then `timed out waiting for llama-server to start`,

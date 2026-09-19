@@ -152,7 +152,10 @@ def block_shipped() -> str:
         if len(parts) != 2:
             continue
         when, subject = parts
-        lines.append(f"| {when} | {subject.replace('|', '\\|')} |")
+        # Escaped outside the f-string: a backslash inside an f-string expression is a
+        # syntax error before Python 3.12, and this project supports 3.11.
+        escaped = subject.replace("|", "\\|")
+        lines.append(f"| {when} | {escaped} |")
     return "\n".join(lines)
 
 
@@ -171,7 +174,11 @@ def render(text: str) -> str:
             print(f"  [warn] no {name} block in the bible — skipped", file=sys.stderr)
             continue
         body = fn()
-        text = pattern.sub(lambda m: f"{m.group(1)}\n{body}\n{m.group(3)}", text)
+        # `body` is bound as a default argument: a bare closure over a loop variable
+        # reads whatever it holds when the lambda finally runs, which here is the last
+        # block's body substituted into every block.
+        text = pattern.sub(
+            lambda m, body=body: f"{m.group(1)}\n{body}\n{m.group(3)}", text)
     return text
 
 

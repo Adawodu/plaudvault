@@ -27,7 +27,7 @@ mcp = ["mcp>=1.2"]
 # Everything needed to run the suite and the linter from a fresh clone. The tests
 # cover the safety properties — tier scope, quote grounding — so "I could not run the
 # tests" must never be the reason a change ships unchecked.
-dev = ["pytest>=8.0", "ruff>=0.6", "mcp>=1.2"]
+dev = ["pytest>=8.0", "ruff>=0.6", "mcp>=1.2", "pillow>=10.0"]
 
 [project.scripts]
 plaudctl = "plaudvault.cli:main"
