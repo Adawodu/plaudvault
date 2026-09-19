@@ -7,11 +7,10 @@ file. Safe to re-run; existing values become the defaults you can accept with En
 from __future__ import annotations
 
 import shutil
-import sys
 from pathlib import Path
 
 from . import llm, transcribe
-from .config import DEFAULTS, CONFIG_PATH, is_apple_silicon, load, save
+from .config import CONFIG_PATH, is_apple_silicon, load, save
 
 
 def _ask(prompt: str, default: str = "") -> str:

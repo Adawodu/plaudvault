@@ -43,7 +43,7 @@ class Recording:
     raw: dict
 
     @classmethod
-    def from_api(cls, d: dict) -> "Recording":
+    def from_api(cls, d: dict) -> Recording:
         return cls(
             id=d["id"],
             filename=d.get("filename") or d.get("fullname") or d["id"],
@@ -79,7 +79,7 @@ class PlaudClient:
     def close(self) -> None:
         self._http.close()
 
-    def __enter__(self) -> "PlaudClient":
+    def __enter__(self) -> PlaudClient:
         return self
 
     def __exit__(self, *exc) -> None:

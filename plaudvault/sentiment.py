@@ -102,7 +102,11 @@ def _clamp(value, lo: float, hi: float, default: float | None = None) -> float |
         return default
 
 
-def _score_segment(cfg: Config, chunk: str, n: int) -> dict | None:
+def _score_segment(cfg: Config, chunk: str, n: int, tier: str | None) -> dict | None:
+    # The tier travels with every segment, not just with the recording: `_generate`
+    # refuses to send a transcript to a remote provider unless that tier is in scope,
+    # and a segment that arrives without one would be judged on a weaker claim than the
+    # recording it came from.
     data = _parse_object(_generate(cfg, PROMPT.format(chunk=chunk), tier=tier))
     if not data:
         return None
@@ -129,7 +133,7 @@ def _aggregate(segments: list[dict]) -> dict:
     """Reduce per-segment readings to one, weighted by how much speech each covers."""
     weights = [max(s["chars"], 1) for s in segments]
     total = sum(weights)
-    wmean = lambda key: sum(s[key] * w for s, w in zip(segments, weights)) / total  # noqa: E731
+    wmean = lambda key: sum(s[key] * w for s, w in zip(segments, weights, strict=True)) / total  # noqa: E731
 
     valence = round(wmean("valence"), 3)
     values = [s["valence"] for s in segments]
@@ -168,7 +172,7 @@ def score_text(cfg: Config, text: str, *, tier: str | None = None) -> dict | Non
     segments = [
         seg
         for i, chunk in enumerate(_chunk(text), 1)
-        if (seg := _score_segment(cfg, chunk, i)) is not None
+        if (seg := _score_segment(cfg, chunk, i, tier)) is not None
     ]
     return _aggregate(segments) if segments else None
 

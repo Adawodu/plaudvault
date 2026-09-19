@@ -256,10 +256,10 @@ def sentiment_trend(
                 "start_iso": time.strftime("%Y-%m-%d", time.localtime(start)),
                 "n": len(members),
                 "mean_valence": round(
-                    sum(m["valence"] * w for m, w in zip(members, weights)) / total, 3
+                    sum(m["valence"] * w for m, w in zip(members, weights, strict=True)) / total, 3
                 ),
                 "mean_energy": round(
-                    sum((m["energy"] or 0) * w for m, w in zip(members, weights)) / total, 3
+                    sum((m["energy"] or 0) * w for m, w in zip(members, weights, strict=True)) / total, 3
                 ),
                 "hours": round(sum(weights) / 60, 1),
             }

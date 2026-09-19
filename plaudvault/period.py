@@ -64,7 +64,7 @@ def parse(text: str, *, now: float | None = None) -> tuple[int | None, int | Non
         return _epoch(int(s), 1, 1), _epoch(int(s) + 1, 1, 1)
 
     if m := re.fullmatch(r"last\s+(\d{1,4})\s+days?", s):
-        end = int(time.mktime(t)) 
+        end = int(time.mktime(t))
         return end - int(m.group(1)) * 86400, None
 
     if s in ("today", "yesterday"):

@@ -1,0 +1,33 @@
+# The suite is fast and has no network, no Ollama and no archive — every test builds its
+# own SQLite in a tmpdir. So CI can be exactly what a contributor runs locally, and a
+# green tick here means the safety properties still hold: tier scope, quote grounding,
+# and the filters that must be applied before ranking.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # The transcription backends (mlx-whisper, faster-whisper) pull torch-sized
+      # wheels and nothing under test touches them, so the package's own dependencies
+      # are deliberately not installed here. Tests import plaudvault modules directly.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest ruff numpy httpx fastapi "mcp>=1.2"
+      - name: Lint
+        run: ruff check plaudvault tests
+      - name: Test
+        run: pytest

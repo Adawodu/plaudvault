@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import re
 import time
-from pathlib import Path
 
 from .config import Config
 from .store import Store
@@ -217,7 +216,7 @@ def to_svg(model: dict, *, dark: bool = False) -> str:
     # would silently stack the overflow on one row — three labels drawn on top of each
     # other is worse than three ticks. So anything past the cap is demoted to a tick.
     _cands = [p for p in d["pins"] if p.get("labelled")]
-    for pin, lane in zip(_cands, _lanes(_cands, dur)):
+    for pin, lane in zip(_cands, _lanes(_cands, dur), strict=True):
         pin["labelled"] = lane < MAX_LANES
         pin["_lane"] = lane
     _labelled = [p for p in d["pins"] if p.get("labelled")]
@@ -388,7 +387,7 @@ def to_excalidraw(model: dict) -> dict:
     """
     d, dur = model, model["duration_ms"]
     cands = [p for p in d["pins"] if p.get("labelled")]
-    for pin, lane in zip(cands, _lanes(cands, dur)):
+    for pin, lane in zip(cands, _lanes(cands, dur), strict=True):
         pin["labelled"] = lane < MAX_LANES
         pin["_lane"] = lane
     labelled = [p for p in d["pins"] if p.get("labelled")]
@@ -518,8 +517,8 @@ def _name_theme(cluster_texts: list[str], corpus_df: dict, n_docs: int, k: int =
     scored against how many clusters use it at all, and a word appearing everywhere is
     worth nothing no matter how often it appears here.
     """
-    from collections import Counter
     import math
+    from collections import Counter
 
     here = Counter()
     for t in cluster_texts:
@@ -594,7 +593,7 @@ def arc_story(cfg: Config, store: Store, *, days: int | None = None, themes: int
 
     # weeks, so a theme's thickness reads as "how much of that week was this"
     buckets: dict[int, dict] = {}
-    for row, lab in zip(rows, labels):
+    for row, lab in zip(rows, labels, strict=True):
         wk = _week_start(row["started_at"])
         b = buckets.setdefault(wk, {"start": wk, "counts": {}, "total": 0, "recs": set()})
         b["counts"][int(lab)] = b["counts"].get(int(lab), 0) + 1
@@ -605,13 +604,13 @@ def arc_story(cfg: Config, store: Store, *, days: int | None = None, themes: int
     n_clusters = int(labels.max()) + 1
     corpus_df: dict[str, int] = {}
     for j in range(n_clusters):
-        seen = {w for r, lab in zip(rows, labels) if lab == j for w in _words(r["text"])}
+        seen = {w for r, lab in zip(rows, labels, strict=True) if lab == j for w in _words(r["text"])}
         for w in seen:
             corpus_df[w] = corpus_df.get(w, 0) + 1
 
     theme_rows: list[dict] = []
     for j in range(n_clusters):
-        members = [r for r, lab in zip(rows, labels) if lab == j]
+        members = [r for r, lab in zip(rows, labels, strict=True) if lab == j]
         if not members:
             continue
         theme_rows.append({
@@ -744,7 +743,7 @@ def arc_svg(model: dict, *, dark: bool = False) -> str:
             f'{elapsed / 7:.0f} weeks with nothing recorded</text>'
         )
 
-    for per, x in zip(periods, xs):
+    for per, x in zip(periods, xs, strict=True):
         w = 78
         y = top
         total = max(per["total"], 1)

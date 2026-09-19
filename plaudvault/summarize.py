@@ -6,13 +6,12 @@ conversation summarized from its first 8k tokens is worse than no summary.
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from pathlib import Path
 
 from .config import Config
-from .llm import LLMError, available, generate
+from .llm import available, generate
 from .store import Store
 from .transcribe import read_transcript
 

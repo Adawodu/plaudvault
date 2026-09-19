@@ -209,7 +209,7 @@ WantedBy=timers.target
         subprocess.run(["systemctl", "--user", "enable", "--now", unit], check=False)
         print(f"  enabled {unit}")
 
-    print(f"\n  console: always on, restarted if it exits")
+    print("\n  console: always on, restarted if it exits")
     print(f"  sync:    {', '.join(f'{h:02d}:00' for h in hours)} daily")
     print("  logs:    journalctl --user -u plaudvault-console -f")
     print("\n  For the console to survive logout: sudo loginctl enable-linger $USER")

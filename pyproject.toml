@@ -24,6 +24,10 @@ portable = ["faster-whisper>=1.0"]
 speakers = ["pyannote.audio>=3.1"]
 # Serve the archive to MCP clients: `plaudctl mcp`.
 mcp = ["mcp>=1.2"]
+# Everything needed to run the suite and the linter from a fresh clone. The tests
+# cover the safety properties — tier scope, quote grounding — so "I could not run the
+# tests" must never be the reason a change ships unchecked.
+dev = ["pytest>=8.0", "ruff>=0.6", "mcp>=1.2"]
 
 [project.scripts]
 plaudctl = "plaudvault.cli:main"
@@ -37,3 +41,22 @@ packages = ["plaudvault"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "plaudvault/static" = "plaudvault/static"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Deliberately narrow. This codebase explains itself in prose and the linter is here to
+# catch what a reader cannot — an unused import, a shadowed name, a bare except — not to
+# have opinions about how it reads.
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",   # line length is advisory here; the comments carry the argument
+    "B008",   # FastAPI/Typer-style defaults in signatures are the documented idiom
+    "E702",   # `path = tmp / "x"; path.mkdir()` — a deliberate idiom in test setup
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
