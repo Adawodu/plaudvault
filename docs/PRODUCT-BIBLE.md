@@ -489,6 +489,280 @@ An unknown tier is refused too — the stages now pass the recording's tier expl
 
 This landed *before* any key did, which is the only order in which it is worth anything.
 
+### D28 — A search hit stays the citation; context is a second field
+A chunk is 1200 characters because a hit has to point at a *findable moment* — small
+enough that "somewhere in these ten minutes" is not the answer. That is the wrong size
+for the other thing these hits are now used for: an MCP client reading one and writing
+prose over it has a paragraph torn out of a page. The manual workaround was a second
+`get_transcript` call with hand-guessed bounds, which is a round trip and a guess.
+
+So `search()` takes `context=N` and `search_recordings` defaults it to 1. The tempting
+version — widen `passage` itself — was rejected: `passage` sits at `at`, and it is the
+text the tool docstring tells a client to quote. Widen it and the client keeps quoting
+the field, now attributing a neighbour's sentence to a timestamp where it was never
+said. The citation is the product, so the hit is returned exactly as indexed and the
+window arrives beside it as `context`, carrying its own `context_span`.
+
+Neighbours are stitched, not concatenated: chunks re-seed from the tail of the one
+before, so a naive three-chunk window repeats ~400 characters of real speech — measured
+at 420 on a live recording — and a model reading a sentence twice can report it as
+emphasis or as two separate moments. The overlap is an exact suffix/prefix run, so it is
+matched exactly and only above 24 characters. A missed overlap reads as mild repetition;
+a wrongly-guessed one would delete words that were actually said, and only one of those
+is recoverable.
+
+Overlapping windows between two hits in the same recording are **not** merged. With the
+per-recording cap at 3 they will sometimes duplicate, and the cost is tokens; merging
+would hand the client two response shapes for one field, and the cost of that is a model
+silently ignoring the pointer form. Revisit if payloads become the complaint.
+
+### D29 — A linter earns its place by finding what a reader cannot
+Added ruff and a CI workflow with a deliberately narrow rule set — unused imports,
+shadowed names, unsorted imports, obvious bug shapes — because this codebase argues for
+itself in prose and a linter with opinions about prose would be noise. The first run
+found `sentiment._score_segment` calling `_generate(..., tier=tier)` with **no `tier` in
+scope**: a `NameError` on every tone-scoring call, caught by the surrounding
+`except Exception` and reported as an ordinary per-recording failure. It arrived with
+D27 — the commit that gave the cloud a tier scope threaded `tier` into the call without
+adding it to the signature — so tone scoring has been dead since 2026-09-03, with 61 of
+94 recordings holding readings taken before it and 33 silently failing since. The broad
+except is why nobody ever saw a traceback.
+
+Two things follow. The tier now travels with every segment rather than being read once
+in `run()` and dropped — it is the argument the remote-provider gate reads, so losing it
+en route is a safety failure, not a cosmetic one. And a broad `except` around a loop is
+a legitimate pattern here (one bad recording must not stop a batch), which is exactly
+why the static check has to exist: the runtime was designed to keep going, so the only
+thing that could notice was a tool that reads the code.
+
+### D30 — A conversation has a kind, and the kind carries a budget
+Extraction ran identically on every recording, and the archive says what that cost:
+**median 12 actions per conversation against a wanted 2-3, maximum 69, and 567 of 982
+dropped by hand.** 539 of those drops arrived in bursts of ten or more — that is not
+triage, it is clearing the board, and it means the item-level labels are worth less than
+they look while the recording-level verdict is unambiguous: *this conversation should
+have produced almost nothing.*
+
+Nothing was broken. `extract_from_text` asks each chunk "what commitments are here?",
+a long recording is ~15 chunks, and a leading question gets answered. One prayer session
+produced 69 action items. The missing fact is the cheapest one available: **a prayer is
+not a standup.**
+
+So one call per *recording*, against the summary that already exists, puts it in a fixed
+vocabulary — `working`, `product`, `interview`, `personal`, `devotional`, `media`,
+`other` — and each kind carries a budget. Budget 0 means extraction **never runs**, which
+is a different outcome from running and finding nothing: the console can say "nobody in
+the room was committing to anything" instead of showing an empty board that looks like a
+failure.
+
+**`devotional` was budgeted 0 and the archive overruled it.** A sermon on spiritual
+leadership produced *"commit to breaking bread with someone in an intentional way at
+least once a month"* — which its owner is acting on, and which a budget of 0 would have
+hidden. It is 1 now: a teaching conversation is not a working session, but it is not
+empty either. `media` stays 0 on firmer ground — nobody in the room is speaking, and no
+action from a `media` recording has ever been accepted.
+
+**The vocabulary is fixed, not learned.** A clustering would drift with the corpus and
+take the budgets, the console labels and the MCP contract with it. Six kinds a person can
+hold in their head is a schema; a clustering is a snapshot. A model that invents a kind
+lands on `other` with confidence 0 rather than being coerced to `working` — coercion
+would hand a budget of 3 to something nobody classified.
+
+`source` records who decided, and a model run never overwrites a human, for the same
+reason a re-titled recording keeps a person's title (D17): the kind decides whether
+extraction runs at all, so a silent reclassification changes what reaches the board.
+
+**Measured on the corpus.** 70 of 87 classified (17 had no summary yet): personal 33,
+interview 12, product 7, working 7, devotional 6, other 4, media 1. Against today's
+980 actions the budgets allow **111** — and 41 of those actions sit in devotional
+recordings that will now never be scanned at all.
+
+**The budget is reported, not yet enforced.** Choosing *which* three survive needs a
+ranker, and truncating by order of appearance would be an arbitrary answer wearing a
+confident face. Until that exists, a run prints how far over budget it went. The gap
+between 980 and 111 is the size of the next problem, now stated in a number.
+
+**What this does not fix.** The worst offenders — 69, 63, 61 actions — are single files
+holding several unrelated conversations, a pin left running. Their summaries honestly say
+"a mix of family, tech and business", so they classify as `other` and keep a budget of 3.
+The classifier is right and the *file* is wrong. **B15 (split at conversation boundaries)
+is therefore a prerequisite for the budget to bite on exactly the recordings that need it
+most**, which was not obvious before this was built.
+
+### D31 — The ranker is a comparative selection call, after a rubric was measured and thrown away
+D30 left the budget unspent because choosing *which* three needs a way to compare
+candidates. The obvious answer was built first: a lexical rubric scoring concreteness,
+intent markers and a time expression, with weights in one place and a breakdown on every
+score. It is deleted, and the measurement is why.
+
+Scored against the only ground truth this archive holds — the seven actions its owner
+accepted, against the 975 he did not — it put **one of seven** inside its budget. On mean
+position within each candidate list (0 = top, 1 = bottom) it scored **0.382, against
+0.449 for extraction order and 0.487 for random.** Better than nothing; nowhere near good
+enough to pick three.
+
+The reason it failed is worth more than the rubric was. *"Define the compensation band
+for the role"* was dropped; *"Identify the target audience for the app"* was kept. Those
+are the same sentence — same concreteness, same absent time, same abstract-ish object.
+What separates them is whose commitment it is and whether it was decided or merely aired.
+**Neither is visible in the sentence**, so no sentence-scorer can find it. A first-person
+filter fails the same way and worse: only 3 of the 7 kept actions contain one, against
+27% of the 565 dropped.
+
+So selection is one model call per *recording*, with the summary in the prompt and every
+candidate visible at once:
+
+1. **Comparative, not absolute.** A small model asked "is this a real commitment?" about
+   one sentence is guessing. Asked "which three of these fourteen" it is choosing, which
+   is the thing it is good at.
+2. **One call.** Extraction already makes ~15 per recording, so precision costs about 7%
+   more. The objection that sank a per-item second-pass judge does not apply to a pass
+   that runs once.
+3. **The budget is an argument, not an inference.** The number is a product decision; the
+   model is only asked to honour it.
+
+**Permission to return nothing is the most important line in the prompt.** Extraction
+over-produces because it asks each chunk a leading question. Selection is told explicitly
+that most conversations hold one or two real commitments and that `{"keep": []}` is a
+correct answer.
+
+**Measured on a property the corpus can actually support.** Agreement with seven accepts
+is an underpowered test — selection scores 1/7 there too, which at three slots from
+pools of 6-69 is indistinguishable from chance. But *meta-talk* — actions that describe
+the conversation rather than work arising from it — is measurable at scale, and it is
+demonstrably what the owner rejects: `walk` (15), `discuss` (14), `clarify` (11) and
+`share` (11) lead the opening verbs of his 565 dropped actions. Across 14 recordings:
+
+| | meta-talk rate | n |
+|---|---|---|
+| all candidates | 12.0% | 565 |
+| first-3 by extraction order | **21.2%** | 33 |
+| selection | **0.0%** | 28 |
+
+Extraction order is *worse than the corpus average*, because meta-talk clusters early in
+a conversation — which is what "take the first three" was quietly doing. Selection
+removed it entirely (0 of 28, p≈0.001 against the baseline rate).
+
+**Nothing is deleted.** Everything not selected becomes `overflow`: kept, off the board,
+carrying the model's reason, and promotable in one click. The cut is a judgement about a
+dozen sentences, not a fact, and a filter you cannot see is one you stop trusting. A
+selection that fails to parse keeps *everything* and says so — `[]` and "no usable
+answer" are different answers and must never collapse into each other.
+
+### D32 — Label the pool, not the picks
+Two rankers have now been proposed for this budget and neither could be validated,
+because the archive's own history cannot support it: seven accepted actions, and 539 of
+the 567 drops arriving in bursts of ten or more. A burst is a person clearing a board,
+not judging items — so the negatives are unreliable and the positives are seven.
+
+The number has to be made. The design question is *what to label*, and the obvious
+answer is wrong: labelling a ranker's picks produces a set that rots the moment the
+ranker changes, which is precisely the trap B14 exists to warn about. So `plaudctl judge`
+labels **the whole candidate pool** for a sample of recordings. Any future ranker can
+then be scored against it offline, forever, without asking a person the same question
+twice.
+
+Three properties make it honest. **Order is randomised**, because a list shown in
+extraction order anchors the judge on one of the things being measured. **The verdict is
+per item**, because "would you put this on your list" is answerable about a sentence and
+"is this board good" is not — a board-level verdict is the bulk drop that made the
+existing history useless. And **an unlabelled pick counts as nothing, not as a miss**,
+because a half-labelled set must not make a working ranker look broken.
+
+`plaudctl judge --measure` reports precision *and* recall of keepers. Precision alone
+would make "keep nothing" look perfect, which is the exact failure a budget invites.
+The set lives at `{archive_root}/eval/actions.jsonl` — beside the transcripts, never in
+this repository, same reasoning as the retrieval golden set.
+
+### D33 — A product conversation earns a brief, not a bigger budget
+The owner's exception to a board of three is the conversation that specifies something
+for an agent to build, research or execute. The tempting reading is that those deserve a
+larger ceiling. That is the wrong shape: sixty checkboxes is not a specification, it is a
+specification shredded into sixty pieces that have each lost the context that made them
+meaningful.
+
+What an agent needs to start is a **brief** — what is being built and why, the
+constraints, what was decided, what is still open — and then a small number of actions,
+which selection already produces. So `product` keeps its budget of three and gains a
+document beside it, written to `{archive_root}/briefs/`.
+
+**`## Open` is the section that justifies the document.** A model asked to summarise a
+design conversation reports the decisions and quietly drops the disagreements, because
+decisions sound like conclusions and open questions sound like noise. An agent that acts
+on the decisions while unaware of what is unresolved is the specific failure this
+prevents, so the section is demanded explicitly, "None stated" has to be written out, and
+the merge step that combines partial briefs is told that the only reason to drop an open
+question is that a later part of the conversation resolved it — in which case it moves to
+`## Decided` rather than disappearing.
+
+**A brief needs a human-confirmed kind, and that gate was learned on the first real
+run.** It produced a brief for a recording whose title named two people and a business
+topic — classified `product` at 0.95 confidence, because a summary of it genuinely is
+business analysis, while the conversation is mostly a personal argument with some
+business talk in the middle. A veto in the prompt was tried first and **did not fire**: a
+chunk full of real business analysis has no reason to decline, and no chunk can see what
+a conversation is *mostly* about. The veto stays as a cheap second line; it is not the
+control.
+
+The control is the rule the product already runs on — a proposal does nothing until a
+person accepts it. An action must be accepted before it can be dispatched (D20); a brief
+is higher-consequence than an action, so it requires `source = 'human'` on the
+conversation's kind, which is what `plaudctl kinds --set <id> product` records. `--force`
+rewrites generated briefs; it does not manufacture consent.
+
+This does not fix the cause. A single file holding a personal argument and a business
+discussion is B15, and no classifier reading a summary of it can be right — which is the
+third independent finding this session pointing at the same backlog item.
+
+**A hand-edited brief is never overwritten, `--force` included.** A brief is a working
+document; correcting it and handing it on is the whole point. The generated marker lives
+*inside the file* rather than in the database, because the file is the artifact — it gets
+copied, mailed and pasted into an agent's context, and a provenance claim stored
+elsewhere stops travelling with the thing it describes.
+
+### D34 — A local address is not locality: Ollama's cloud runs through 127.0.0.1
+`is_local()` decided whether transcripts leave this machine by looking at the host, and
+that was correct until Ollama shipped hosted models. They are pulled like any other
+model, named with a `-cloud` suffix (`gpt-oss:120b-cloud`), and **addressed at
+`127.0.0.1:11434`** — the local daemon forwards the prompt to Ollama's servers.
+
+So the address check would have reported *"nothing leaves this machine"* while a therapy
+session was in flight, and `remote_allowed()` would have waved every tier through
+because it believed the provider was local. That is exactly the failure D27 exists to
+prevent, arriving through the one door D27 did not watch. Nobody had to misconfigure
+anything: pulling a cloud model and pointing `ollama_model` at it is the documented way
+to use them.
+
+A cloud-suffixed model name now makes the provider remote regardless of host, and the
+tier scope applies unchanged. Detection is deliberately broad and anchored to a
+separator — `cloudburst:7b` is not caught, `qwen3:cloud` is — because a model wrongly
+called remote costs a line of config and a model wrongly called local costs a
+conversation you cannot take back.
+
+**Embeddings are refused outright rather than tier-scoped.** Every other model call
+handles one recording and can be gated by its tier. Indexing sends *every sentence in
+the archive* in one sweep, with no per-recording decision to hang a gate on, so there is
+no scope that makes a hosted embedder proportionate. `search.available()` refuses before
+the first request and `embed()` refuses again at the point text would go on the wire.
+
+### D35 — The cloud is bought per step, not per installation
+A large model is the obvious answer to B8's remaining question, and `cloud_model` plus
+`--cloud` makes one available on demand. What matters is *which* steps may spend it.
+
+Summarising, extracting and scoring tone are hundreds of calls over whole transcripts.
+Selection is **one call per recording** and is pure judgement — and it sends only the
+candidate list and the summary, never the transcript. Writing a brief is one call per
+confirmed conversation and its output is read by an agent. Those two are where a large
+model changes an answer rather than a rendering, and they are also where the least text
+travels per unit of value. So `--cloud` applies to those and nothing else: switching the
+whole provider to buy quality on the few would send the many.
+
+No safety machinery is special-cased for it. `with_cloud()` returns an ordinary remote
+config, so every call consults `cloud_tier_scope` per recording exactly as a hosted
+endpoint would, and a tier outside the scope **raises rather than falling back** to the
+local model — a silent downgrade would leave two models' work on one board with nothing
+recording which wrote what (the same argument as D14's corollary about sentiment).
+
 ### D14 — qwen3:8b, not the largest model available
 `qwen3.8` (27.3B, Q4_K_M, 17.7 GB) was pulled and **cannot load** on a 24 GB machine:
 5m04s of thrashing, swap climbing, then `timed out waiting for llama-server to start`,
@@ -506,32 +780,32 @@ a mid-corpus change puts a seam in the trend that looks like a mood shift and is
 ## 5. Status
 
 <!-- BEGIN:STATUS (generated — do not edit by hand) -->
-_Generated 2026-09-04 from git and the live archive._
+_Generated 2026-09-19 from git and the live archive._
 
 ### Codebase
 
 | | |
 |---|---|
-| Python modules | 30 |
-| Lines of Python | 9,250 |
-| Commits | 26 |
-| CLI verbs | 27 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `browse`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
+| Python modules | 34 |
+| Lines of Python | 10,763 |
+| Commits | 31 |
+| CLI verbs | 30 — `login`, `logout`, `status`, `fresh`, `sync`, `verify`, `brief`, `judge`, `kinds`, `index`, `search`, `story`, `title`, `diarize`, `speakers`, `dispatch`, `mcp`, `eval`, `tier`, `browse`, `web`, `init`, `service`, `run`, `prune`, `transcribe`, `summarize`, `sentiment`, `notes`, `extract` |
 
-Largest modules: `cli.py` (937), `store.py` (908), `web.py` (860), `story.py` (804), `diarize.py` (536), `mcp_server.py` (481).
+Largest modules: `cli.py` (1194), `store.py` (1024), `web.py` (935), `story.py` (803), `mcp_server.py` (550), `diarize.py` (536).
 
 ### Live archive
 
 | | |
 |---|---|
-| Recordings | 62 |
-| Transcribed | 62 |
+| Recordings | 94 |
+| Transcribed | 94 |
 | Tone scored | 61 |
-| Indexed chunks | 1,527 |
-| Triaged | 62 |
-| Open commitments | 109 |
-| Action events | 1,263 |
-| Audio captured | 42.1 hours |
-| Tiers | exclude 3 · local 1 · stack 58 |
+| Indexed chunks | 2,559 |
+| Triaged | 85 |
+| Open commitments | 410 |
+| Action events | 1,564 |
+| Audio captured | 76.7 hours |
+| Tiers | exclude 3 · stack 82 |
 
 <!-- END:STATUS -->
 
@@ -545,6 +819,11 @@ Find one with `git log --grep="<subject>"`.
 
 | Date | What landed |
 |---|---|
+| 2026-09-19 | Record the decisions, and what the measurements cost to learn |
+| 2026-09-19 | A local address is not locality: Ollama's cloud runs through 127.0.0.1 |
+| 2026-09-19 | Give a conversation a kind, a budget, and a way to spend it |
+| 2026-09-19 | Give a search hit its neighbours, without loosening the citation |
+| 2026-09-19 | Run the tests in CI, and find a dead tone-scorer doing it |
 | 2026-09-04 | Redraw the diagrams against what the pipeline actually is |
 | 2026-09-03 | Make a stated constraint a filter, and give the cloud a tier scope |
 | 2026-09-02 | Tell me when the console is running code older than the files on disk |
@@ -584,9 +863,8 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 | # | Item | Why |
 |---|---|---|
 | B14 | **A verified golden set** | B3 built the instrument; every one of its 48 queries is still `verified: false`, because each was written *from* the recording it is scored against. That measures a strictly easier task than the real one, so the harness currently has no number anybody is allowed to quote. Queries written from memory, before looking, are the fix. Blocks B4, B5 and D-open-1, all of which are comparisons against a baseline. |
-| B4 | **Neighbour expansion for answer context** | Chunks are 1200 chars, tuned for search snippets. An MCP client answering a question wants the hit plus its neighbours; `get_transcript` with a time window is the manual version of this. |
 | B16 | **Due-date resolution during extraction** | "By Friday" has to become a date while the transcript is in front of the model, or every calendar invite needs a human to retype it. 4 of 681 actions carry one. |
-| B15 | **Split a recording at conversation boundaries** | A pin left running produces one file holding several unrelated conversations. Title, summary, tone and tier are all per-recording and all wrong for such a file, and its chunk count lets it dominate retrieval. Diarization already knows where the voices change; a gap plus a speaker-set change is most of a boundary detector. |
+| B15 | **Split a recording at conversation boundaries** — *promoted: this now blocks B8's worst cases.* | A pin left running produces one file holding several unrelated conversations. Title, summary, tone and tier are all per-recording and all wrong for such a file, and its chunk count lets it dominate retrieval. Diarization already knows where the voices change; a gap plus a speaker-set change is most of a boundary detector. |
 
 ### Later — valuable, design not settled
 
@@ -596,7 +874,7 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 | B11 | **Re-extract after diarization** | Named transcripts should improve `owner` on extracted commitments, which is half of B8. Nothing re-runs extraction when speakers change, so the gain is currently only realised on recordings diarized before their first extract. |
 | B12 | **Contact-reference resolution** | `speakers.external_ref` carries an opaque id and nothing resolves it. Making "map this conversation to my CRM" real needs a resolver per system, and the question is whether plaudvault should hold one at all or hand the string to the agent. |
 | B13 | **Reaching the archive from off-machine** | The MCP server is stdio and the console is loopback-only, so an agent on a remote VM cannot reach either. Needs a real identity proxy before it needs code — see Rejected. |
-| B8 | **Better commitment precision** | 63→18 proposals after D10, but roughly half the survivors are rhetorical ("Make this a reality"). Rhetoric and commitment are grammatically identical to an 8B model. Needs a larger model or a second-pass judge — both were rejected once already. |
+| B8 | **Better commitment precision** | Built: D30 (a budget per kind), D31 (selection spends it), D32 (the instrument to measure it). What is missing is not code — it is **verdicts**. `plaudctl judge` has an empty set, so precision@budget has no value anybody may quote, and D31's claim rests on a proxy (meta-talk, 21.2% → 0.0%) rather than on agreement with the owner. One labelling sitting turns every future change to this from an argument into a number. |
 | B9 | **Backup/restore command** | The precious/derived split in the data-model diagram is the spec. Nobody has written the command. |
 | B10 | **Notification when a scheduled run fails** | A 07:00 sync with the drive unmounted is a silent no-op. Freshness surfaces it only if you look. |
 
@@ -611,6 +889,9 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 | Exposing the console beyond loopback | No auth by design. Would need a real identity proxy first. An agent on a remote VM reaching this archive is B13, and it is a networking-and-identity problem, not a plaudvault feature. |
 | Feeding automatic speaker matches back into voiceprints | D18. One bad match compounds into a drifting identity with nothing in the data saying when it went wrong. |
 | A flag to dispatch a `proposed` action | D20. The acceptance step *is* the human reading the quote. |
+| A lexical rubric for ranking actions | D31. Built and measured: 1 of 7 kept actions inside budget, mean position 0.382 against 0.449 for extraction order. "Define the compensation band" and "Identify the target audience" are the same sentence and got opposite verdicts — what separates them is not in the sentence. |
+| A per-item second-pass judge | D31. Superseded rather than rejected: one *comparative* call per recording is cheaper (≈7% on top of extraction), and a small model choosing among candidates beats the same model scoring one in isolation. |
+| A bigger action budget for product conversations | D33. Sixty checkboxes is a specification shredded into sixty pieces. The artifact wanted is a brief. |
 | Filtering search hits after ranking | D26. Returns three hits when eight were asked for, and cannot distinguish "nothing matched" from "the matches were filtered out". |
 | A global switch for sending transcripts to a cloud model | D27. This archive is not one kind of conversation, and one switch for all of it is how a therapy session reaches a vendor. |
 
@@ -626,8 +907,11 @@ and an MCP client is writing confident prose over it.
 But the score is provisional in a way that matters more than its value. All 48 queries
 were generated from the recordings they are scored against, so the harness is measuring
 an easier task than the real one and every query is flagged `verified: false`. B14 first —
-without it, B4 and B5 are improvements measured against a baseline that does not hold.
-Then B4.
+without it, B5 is an improvement measured against a baseline that does not hold.
+
+B4 shipped ahead of that order on purpose: it does not change *what* ranks, only how much
+text a hit arrives with, so it needs no baseline to justify and it was the change that
+put a test under the MCP read path (D28, D29).
 
 **Next — make the identity layer earn its cost.** Diarization is built but starts empty,
 and its value is entirely in what gets named. D25 removed the two things that made naming
@@ -635,9 +919,20 @@ expensive — you can hear a voice before naming it, and naming is inline rather
 dialog — so the queue of 127 unnamed voices is now a sitting worth doing rather than an
 afternoon. Then B11, because named transcripts are the cheapest available attack on B8.
 
-**Then — extraction quality, or retire the ambition.** B8 is the weakest part of the
-product. Either it gets materially better, or the honest move is to reframe the Actions
-board as "moments worth revisiting" rather than a task list.
+**Then — extraction quality, now a measurement problem.** D30, D31 and D33 built the
+whole chain: a budget per conversation kind, a comparative selection pass that spends it,
+overflow so nothing is lost, and a brief for the one kind where a checklist was the wrong
+artifact. Extraction went from a median of 12 actions per conversation to 1-3, and
+meta-talk on the board from 21.2% to 0.0%.
+
+**What is missing is verdicts, not code.** D32 built the instrument and its set is empty.
+Until a labelling sitting happens, the honest claim is "meta-talk is gone and the board
+is short", not "the right three are on it" — and every future change to selection is an
+argument rather than a comparison. That sitting is the highest-value hour available
+anywhere in this project.
+
+B15 moved up on the way: the worst-yielding recordings are several conversations in one
+file, and no per-recording budget can fix that.
 
 **Ongoing — the corpus grows.** Everything above assumes ~20 hours. At 200 hours,
 revisit D7 (brute force), chunk sizing, and whether `plaudctl run` still fits in a
@@ -729,6 +1024,11 @@ Stated plainly because each one is a way this product can mislead you.
 - **Everything depends on one external volume.** Archive *and* models live on it. It
   unmounted once during development: the failure is graceful and self-recovering, but a
   scheduled run with the drive detached is a silent no-op (B10).
+- **The suite covers behaviour, not coverage.** 137 tests run in under a second with no
+  network, no Ollama and no archive — every one builds its own SQLite in a tmpdir. They
+  are aimed at the properties that must not regress silently: tier scope, quote
+  grounding, filters applied before ranking, and the stitching above. `web.py`, `cli.py`
+  and `story.py` remain untested, and a change there is checked by running it.
 - **Only the Apple Silicon path is battle-tested.** faster-whisper, OpenAI-API and
   systemd paths are implemented and unrun on their target platforms.
 

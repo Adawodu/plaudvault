@@ -197,6 +197,107 @@ recordings to *local* is the difference between an archive and a surveillance co
 
 ## Actions
 
+### What kind of conversation was this?
+
+Before anything is extracted, `plaudctl kinds` classifies each recording from its summary
+into a fixed vocabulary, and each kind carries a **budget** — how many actions such a
+conversation should be expected to yield.
+
+| kind | budget | |
+|---|---|---|
+| `working` | 3 | decisions, planning, a standup, a client call |
+| `product` | 3 | specifying something to be built, researched or executed |
+| `interview` | 1 | much of it is a CV or a job description read aloud |
+| `personal` | 2 | family, logistics, health, money — real commitments, small ones |
+| `devotional` | 1 | prayer, worship, scripture, a sermon or teaching |
+| `media` | 0 | a recording of something playing; nobody in the room is committing |
+| `other` | 3 | none of the above |
+
+This exists because the numbers demanded it. Extraction ran identically on everything,
+and on a real archive that meant a **median of 12 actions per conversation against a
+wanted 2–3, a maximum of 69, and 567 of 982 dropped by hand.** One prayer session
+produced 69 action items. Nothing was broken: extraction asks each chunk "what
+commitments are here?", a long recording is fifteen chunks, and a leading question gets
+answered fifteen times.
+
+A budget of 0 means extraction **never runs** — which is not the same as running and
+finding nothing. The console says "no actions expected from a devotional" instead of
+showing an empty board that reads as a failure.
+
+```bash
+plaudctl kinds                      # classify what isn't classified yet
+plaudctl kinds --list               # the breakdown
+plaudctl kinds --set <id> product   # correct one by hand; a re-run will never undo it
+```
+
+The vocabulary is **fixed, not learned**. A clustering would drift with the corpus and
+drag the budgets, the console labels and the MCP contract with it. Six kinds you can hold
+in your head is a schema; a clustering is a snapshot. A model that invents a kind lands on
+`other` rather than being coerced into `working` — coercion hands a budget to something
+nobody classified.
+
+`devotional` was 0 until the archive overruled it: a sermon produced *"commit to breaking
+bread with someone in an intentional way at least once a month"*, which its owner is
+acting on. A teaching conversation is not a working session, but it is not empty either.
+
+### Choosing which three
+
+Extraction is asked once per chunk and over-produces on purpose — recall first. One
+further call per *recording* then spends the budget, with the conversation's summary for
+context and every candidate visible at once.
+
+A lexical rubric was built for this first and thrown away. Scored against the only ground
+truth the archive held — seven accepted actions against 975 that were not — it placed
+**one of seven** inside its budget, and ranked kept items at mean position 0.382 where
+extraction order managed 0.449 and random 0.487. The failure is the instructive part:
+*"Define the compensation band for the role"* was dropped and *"Identify the target
+audience for the app"* was kept, and those are the same sentence. What separates them is
+whose commitment it is and whether it was decided or merely aired — **neither of which
+is in the sentence**, so no sentence-scorer can find it.
+
+A comparative call can see what a scorer cannot, and it is cheap: extraction already
+makes ~15 calls per recording, so precision costs about 7% more. The single most
+important line in its prompt is permission to return **nothing** — extraction
+over-produces because it asks a leading question, and selection is told that most
+conversations hold one or two real commitments and that keeping none is a correct answer.
+
+Measured across 14 recordings, on the thing the owner's own drop history says he rejects
+— actions that describe the conversation rather than work arising from it:
+
+| | meta-talk rate | n |
+|---|---|---|
+| all candidates | 12.0% | 565 |
+| first-3 by extraction order | **21.2%** | 33 |
+| selection | **0.0%** | 28 |
+
+Taking the first three is *worse than average*, because meta-talk clusters early in a
+conversation.
+
+**Nothing is deleted.** Everything below the line becomes `overflow` — off the board,
+kept, carrying the model's reason, and promotable in one click. A selection that fails to
+parse keeps everything and says so, because "none of these are real" and "the model did
+not answer" are different facts.
+
+### Is the right three on the board?
+
+Nobody knows yet, and the honest answer matters more than a confident one. The meta-talk
+number above is a proxy; agreement with what you actually keep is the real question, and
+the archive cannot answer it — seven accepted actions, and 539 of 567 drops arriving in
+bursts of ten or more, which is a person clearing a board rather than judging items.
+
+```bash
+plaudctl judge              # label a sample; items shown in random order
+plaudctl judge --measure    # precision and recall, selection vs extraction order
+plaudctl judge --status     # how much is labelled
+```
+
+It labels **the whole candidate pool** for each sampled recording, not the ranker's
+picks. That is the difference between a set that measures any future ranker offline
+forever and one that rots the moment the ranker changes. Recall is reported beside
+precision, because precision alone makes "keep nothing" look perfect.
+
+Verdicts live in `{archive_root}/eval/actions.jsonl`, never in this repository.
+
 `plaudctl extract` reads each transcript and proposes **commitments** — things a person
 actually said they would do. Everything arrives as `proposed` and does nothing until you
 accept it. Plenty of recordings contain nothing actionable, and the extractor returns an
@@ -232,6 +333,42 @@ the real corpus it would have discarded 23 sound actions to catch 2 bad ones. A 
 passes if a 40-character run appears verbatim, or if at least 60% of its content words
 do. That keeps 253 of 255 and drops exactly the two leaks. Drops are printed, never
 silent.
+
+### Conversations that specify something
+
+A conversation where you spec something for an agent to build gets a **brief**, not a
+longer checklist. Sixty checkboxes is not a specification — it is a specification
+shredded into sixty pieces, each of which has lost the context that made it mean
+anything.
+
+```bash
+plaudctl kinds --set <id> product   # confirm it: a person decides this
+plaudctl brief                      # write one for each confirmed conversation
+plaudctl brief --show <id>
+```
+
+**A brief needs your confirmation, not just the classifier's.** The first real run wrote
+one for a recording classified `product` at 0.95 confidence that turned out to be mostly
+a personal argument with some business talk in it — the summary the classifier read
+genuinely was business analysis. A brief is the one artifact here designed to travel into
+an agent's context, so it follows the same rule as everything else: a proposal does
+nothing until a person accepts it. The classifier proposes; `kinds --set` confirms.
+
+Five sections: **Intent**, **Constraints**, **Decided**, **Open**, **Risks** — each
+citing the timestamps it came from. `## Open` is the section that justifies the document:
+a model asked to summarise a design conversation reports the decisions and quietly drops
+the disagreements, because decisions sound like conclusions and open questions sound like
+noise. An agent acting on the decisions while unaware of what is unresolved is exactly
+the failure this prevents, so the section is asked for explicitly, "None stated" has to be
+written out, and the merge step is told that the only reason to drop an open question is
+that the conversation resolved it — in which case it moves to `## Decided`.
+
+**Edit them.** A brief is a working document and a re-run will never overwrite one you
+have touched, `--force` included. The marker that says "generated" lives inside the file,
+not in the database, because the file is the artifact: it gets copied, mailed, and pasted
+into an agent's context, and provenance stored elsewhere stops travelling with it.
+
+Agents fetch it with the `get_brief` MCP tool.
 
 Accepting asks for an **intent**: what this is supposed to achieve. Outcome scoring
 later is judged against exactly that, because finishing a task and the task having
@@ -335,6 +472,15 @@ Search returns **cited passages** — recording, timestamp, tier, and the words 
 The client's model does the synthesis; this server does the retrieval and never
 paraphrases, because a paraphrase with no timestamp is exactly the thing you cannot check.
 
+Each hit carries two texts, and they are not interchangeable. `passage` is the indexed
+chunk sitting at `at` — the only text attributable to that timestamp, and the one a
+client is told to quote. `context` is that passage stitched with its neighbours (one
+either side by default, `context=0` to switch it off), spanning `context_span`. It is
+there so a client can understand what was being discussed without a second
+`get_transcript` call and a guessed time window. Widening `passage` itself would have
+been simpler and wrong: clients would keep quoting the field and start attributing a
+neighbour's sentence to a moment where it was never said.
+
 **Constraints are arguments, not prose.** `search_recordings` takes `period` and
 `speaker`; `list_actions` takes `period`, `kind` and `owner`. Both apply them before
 ranking, so an agent asking about March gets March:
@@ -398,6 +544,7 @@ plaudctl index                              # embed transcripts (idempotent)
 plaudctl search "feeling underpaid at work"
 plaudctl search "what did I commit to" --period "August 2026"
 plaudctl search "the schema argument" --speaker Chidera
+plaudctl search "the schema argument" --context 1   # print around each hit
 ```
 
 Or the **Search** tab in the console, where every hit opens the recording cued to the
@@ -429,6 +576,14 @@ disclosure than summarizing one file, and it should not silently inherit that se
 
 Recordings tiered `exclude` are left out, same as everywhere else, with a checkbox to
 include them. No single recording can take more than three slots on a page of results.
+
+**Reading around a hit.** A passage is ~1200 characters, sized so a hit points at a
+findable moment rather than "somewhere in these ten minutes". That is the wrong size for
+answering *from*, so `--context N` prints the N passages either side, stitched — the
+overlap that chunks share is removed, because a window that says the same sentence twice
+reads as emphasis that was never there. The hit itself is still printed above, unchanged
+and at its own timestamp: the passage at `[00:14:22]` is the thing you may quote as
+having been said at 00:14:22, and the window around it is not.
 
 **On the scores:** they are raw cosine similarity, not confidence. There is no value
 below which a result is "wrong" — this model puts most unrelated English text around
@@ -697,6 +852,75 @@ killed run can't wedge the pipeline.
 - **The archive must be on a mounted volume.** If an external drive is unplugged,
   every command fails fast rather than writing a phantom archive to the boot disk that
   would be shadowed on remount.
+
+## Using a bigger model, on demand
+
+Everything defaults to local. Two steps can be pointed at a large model when you want
+one, because they are the two where judgement beats volume:
+
+```toml
+cloud_model      = "gpt-oss:120b-cloud"   # or any model on an OpenAI-compatible endpoint
+cloud_tier_scope = "stack"                # which tiers may leave. Empty = none.
+```
+
+```bash
+plaudctl extract --cloud    # extract locally, CHOOSE with the big model
+plaudctl brief --cloud      # write the brief with the big model
+```
+
+`extract --cloud` keeps the transcript on the machine: extraction is ~15 calls per
+recording and stays local, while selection is **one** call that sends only the candidate
+list and the summary. `brief --cloud` does send the transcript, which is why it is gated
+per recording. Everything else — summaries, tone, titles, embeddings — stays local
+regardless.
+
+### What actually leaves, and what does not
+
+**Anything you send to a hosted model leaves your machine.** That is true of Ollama's
+cloud, OpenAI, Groq, OpenRouter and everyone else, whatever their retention policy says.
+Read the current terms of whichever you pick; this project cannot make a promise on
+another company's behalf, and a policy is a promise rather than a mechanism.
+
+What this project does instead is make the decision explicit and per tier:
+
+- `cloud_tier_scope` is **empty by default**. Setting `cloud_model` on its own sends
+  nothing — holding a key and deciding which conversations may leave are two decisions,
+  and one switch for both is how a therapy session reaches a vendor.
+- A tier outside the scope **raises**. It does not quietly fall back to the local model,
+  because two models' work on one board with nothing saying which wrote what is its own
+  kind of lie.
+- **Embeddings can never be hosted.** Indexing sends every sentence in the archive in
+  one sweep, so there is no per-recording decision to gate and no scope that makes it
+  proportionate. It is refused outright.
+
+**One trap worth knowing about, now closed.** Ollama's hosted models are pulled like any
+other and addressed at `127.0.0.1:11434` — the local daemon forwards the prompt to
+Ollama's servers. An address check therefore reported *"nothing leaves this machine"*
+while it did, and the tier gate never engaged. A `-cloud` suffix now makes a model remote
+regardless of the address it is dialled at.
+
+## Developing
+
+```bash
+pip install -e '.[dev]'
+pytest                  # ~140 tests, under a second
+ruff check plaudvault tests
+```
+
+The suite needs **no network, no Ollama and no archive** — every test builds its own
+SQLite in a tmpdir — so it runs anywhere and runs in CI on every push and pull request.
+
+It is aimed at the properties that would fail *silently*: the tier scope an MCP client
+reads through, `exclude` being unreachable on every path, the check that an extracted
+quote actually appears in its transcript, filters applied before ranking rather than
+after, and the stitching behind `--context`. Those are the behaviours where a regression
+looks exactly like a correct answer. `web.py`, `cli.py` and `story.py` have no tests;
+changes there are checked by running them.
+
+The linter's rule set is deliberately narrow — unused imports, shadowed names, obvious
+bug shapes — because this codebase argues for itself in prose and a linter with opinions
+about prose is noise. Its first run found a `NameError` that a broad `except` around a
+batch loop had been reporting as an ordinary per-recording failure for weeks.
 
 ## Credits
 
