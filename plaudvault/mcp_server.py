@@ -32,11 +32,12 @@ try:
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP as _Server
 
+from . import brief as brief_mod
 from . import dispatch as dispatch_mod
 from . import period as period_mod
 from . import search as search_mod
-from .search import _hhmmss
 from .config import Config, load
+from .search import _hhmmss
 from .store import Store
 from .summarize import summary_path
 from .transcribe import read_transcript
@@ -74,6 +75,7 @@ def _visible(cfg: Config, store: Store, tier: str | None) -> bool:
 def _cite(cfg: Config, row, store: Store) -> dict:
     """The identity of a recording as a client should see it."""
     t = store.triage_of(row["id"])
+    k = store.kind_of(row["id"])
     speakers = [r["name"] for r in store.recording_speakers(row["id"]) if r["name"]]
     return {
         "recording_id": row["id"],
@@ -82,6 +84,10 @@ def _cite(cfg: Config, row, store: Store) -> dict:
         "recorded": time.strftime("%Y-%m-%d %H:%M", time.localtime(row["started_at"])),
         "duration_min": round((row["duration_s"] or 0) / 60, 1),
         "tier": (t["tier"] if t else None) or "untriaged",
+        # What kind of conversation this is. An agent reading a `devotional` or `media`
+        # citation should not expect commitments in it, and should not infer their
+        # absence means the archive missed them.
+        "kind": k["kind"] if k else "unclassified",
         "speakers": speakers,
     }
 
@@ -91,7 +97,7 @@ def _cite(cfg: Config, row, store: Store) -> dict:
 
 @mcp.tool()
 def search_recordings(query: str, limit: int = 8, period: str = "",
-                      speaker: str = "") -> str:
+                      speaker: str = "", context: int = 1) -> str:
     """Search the voice-recording archive by meaning and return cited passages.
 
     Use this to answer "what did I say about X", "when did we discuss Y". Every hit
@@ -103,6 +109,14 @@ def search_recordings(query: str, limit: int = 8, period: str = "",
     before ranking. Embedding them in the query instead does nothing useful: asked
     "what did I commit to in August" as free text, this returned a September recording,
     because "August" was compared as meaning rather than read as a bound.
+
+    **Quote `passage`, reason over `context`.** `passage` is the indexed chunk sitting
+    at `at` — it is what the timestamp refers to and the only text you may attribute to
+    that moment. `context` is that passage stitched with the `context` neighbouring
+    chunks either side, spanning `context_from` to `context_to`; read it to understand
+    what was being discussed, but cite the span, not `at`, if you quote from it.
+    `context=0` returns the passage alone; raise it when one chunk is not enough to
+    answer and you would otherwise call `get_transcript` to read around the hit.
 
     For commitments and tasks, prefer `list_actions` — those live in a table with dates
     and owners, and a similarity search over transcripts is the wrong instrument for a
@@ -131,14 +145,21 @@ def search_recordings(query: str, limit: int = 8, period: str = "",
             if not _visible(cfg, store, h["tier"]):
                 continue
             row = store.get(h["recording_id"])
-            out.append(
-                {
-                    **_cite(cfg, row, store),
-                    "at": h["at"],
-                    "score": h["score"],
-                    "passage": h["text"],
-                }
-            )
+            hit = {
+                **_cite(cfg, row, store),
+                "at": h["at"],
+                "score": h["score"],
+                "passage": h["text"],
+            }
+            # Expanded here rather than inside search(), so the cost is paid only for
+            # the hits that survive the tier filter — over-fetching is 3x the limit.
+            if context > 0:
+                wide = search_mod.expand(store, h, model=cfg.embed_model,
+                                         before=context, after=context)
+                if wide.get("context") and wide["context"] != h["text"]:
+                    hit["context"] = wide["context"]
+                    hit["context_span"] = [wide["context_from"], wide["context_to"]]
+            out.append(hit)
             if len(out) >= limit:
                 break
         return json.dumps(
@@ -148,7 +169,8 @@ def search_recordings(query: str, limit: int = 8, period: str = "",
                 "speaker": speaker or None,
                 "hits": out,
                 "scope": sorted(_tiers(cfg)),
-                "note": "scores are cosine similarity, not confidence",
+                "note": "scores are cosine similarity, not confidence; "
+                        "quote `passage` (it sits at `at`), reason over `context`",
             },
             indent=1,
         )
@@ -245,6 +267,45 @@ def get_transcript(recording_id: str, from_time: str = "", to_time: str = "") ->
         return json.dumps(
             {**_cite(cfg, row, store), "window": [from_time, to_time],
              "transcript": "\n".join(lines)},
+            indent=1,
+        )
+
+
+@mcp.tool()
+def get_brief(recording_id: str) -> str:
+    """The actionable brief for a conversation that specified something to be built.
+
+    Written for conversations classified `product`: what is being built and why, the
+    constraints, what was decided, and — the section that matters most — what is still
+    **open**. Prefer this over `get_recording` when you are about to act on a
+    specification rather than recall a conversation.
+
+    Read `open` before acting. Acting on the decisions while unaware of the unresolved
+    questions is the specific failure this document exists to prevent. If there is no
+    brief, the conversation was not classified `product`; `get_recording` is the tool.
+    """
+    cfg = _cfg()
+    with Store(cfg.db_path) as store:
+        row = store.get(recording_id)
+        if row is None:
+            return json.dumps({"error": "no such recording"})
+        t = store.triage_of(recording_id)
+        if not _visible(cfg, store, t["tier"] if t else None):
+            return json.dumps({"error": "recording is outside this client's tier scope"})
+        path = brief_mod.brief_path(cfg, recording_id)
+        if not path.exists():
+            k = store.kind_of(recording_id)
+            return json.dumps({
+                "error": "no brief for this recording",
+                "kind": k["kind"] if k else "unclassified",
+                "note": "briefs are written for `product` conversations only",
+            })
+        return json.dumps(
+            {
+                **_cite(cfg, row, store),
+                "brief": path.read_text(),
+                "edited_by_hand": brief_mod.was_edited(path),
+            },
             indent=1,
         )
 
@@ -413,6 +474,10 @@ def list_actions(status: str = "accepted", limit: int = 30, period: str = "",
     `kind`: commitment | suggestion | manual.
     `owner`: whose commitment, matched case-insensitively against the extracted owner.
 
+    A board is capped by its conversation's budget, so a short list is not necessarily
+    everything that was found: `below_the_line` counts what the budget cut. Those are
+    kept, not discarded, and a person can promote one.
+
     Prefer this over search_recordings for any question about commitments or tasks in a
     time range. Similarity search cannot honour a date: asked for August it will return
     September recordings, because "August" is compared as meaning rather than read as a
@@ -469,6 +534,10 @@ def list_actions(status: str = "accepted", limit: int = 30, period: str = "",
                     "until": time.strftime("%Y-%m-%d", time.localtime(until)) if until else None,
                 },
                 "actions": out,
+                # What the budgets cut, counted rather than described. An agent reading
+                # a two-item board should know whether that is the conversation or the
+                # ceiling.
+                "below_the_line": sum(store.overflow_counts().values()),
                 "note": "only status=accepted may be dispatched; check each against its quote",
             },
             indent=1,

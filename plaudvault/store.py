@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS actions (
     at_ms         INTEGER,            -- timestamp within the recording
     due_at        INTEGER,
     status        TEXT NOT NULL DEFAULT 'proposed',
-                  -- proposed | accepted | in_progress | done | dropped
+                  -- proposed | accepted | in_progress | done | dropped | overflow
+                  -- `overflow` is extracted, kept, and below the conversation's budget
+                  -- line: not on the board, not discarded, promotable by a human.
     system_id     INTEGER REFERENCES systems(id),
     outcome_score INTEGER,            -- 1-5, set at completion
     outcome_note  TEXT,
@@ -106,6 +108,19 @@ CREATE TABLE IF NOT EXISTS sentiment (
     segments_json TEXT,
     model         TEXT,
     scored_at     INTEGER NOT NULL
+);
+
+-- What kind of conversation a recording is, and therefore how much extraction should
+-- expect from it. Derived from the summary and rebuildable, except where a human set
+-- it: `source` records who decided, and a re-run never overwrites a person.
+CREATE TABLE IF NOT EXISTS conversation_kinds (
+    recording_id TEXT PRIMARY KEY REFERENCES recordings(id),
+    kind         TEXT NOT NULL,      -- see kinds.KINDS; a fixed vocabulary
+    confidence   REAL,               -- 0..1, the model's own; 0 when it invented a kind
+    why          TEXT,               -- the model's one-line reason, for the console
+    source       TEXT NOT NULL DEFAULT 'model',   -- model | human
+    model        TEXT,
+    decided_at   INTEGER NOT NULL
 );
 
 -- Transcript windows and their embeddings, for semantic search. The vector is raw
@@ -222,6 +237,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("recordings", "titled_at", "ALTER TABLE recordings ADD COLUMN titled_at INTEGER"),
     ("recordings", "diarized_at", "ALTER TABLE recordings ADD COLUMN diarized_at INTEGER"),
     ("recordings", "diarize_model", "ALTER TABLE recordings ADD COLUMN diarize_model TEXT"),
+    # Why selection kept or cut this one, and where it placed among the kept. Stored so
+    # a board can explain a cut in the model's own words rather than by silence.
+    ("actions", "selection_note", "ALTER TABLE actions ADD COLUMN selection_note TEXT"),
+    ("actions", "selection_rank", "ALTER TABLE actions ADD COLUMN selection_rank INTEGER"),
 ]
 
 
@@ -246,7 +265,7 @@ class Store:
     def close(self) -> None:
         self.db.close()
 
-    def __enter__(self) -> "Store":
+    def __enter__(self) -> Store:
         return self
 
     def __exit__(self, *exc) -> None:
@@ -471,6 +490,65 @@ class Store:
             "ORDER BY r.started_at DESC"
         ).fetchall()
 
+    # ------------------------------------------------- conversation kind
+
+    def set_kind(self, rec_id: str, *, kind: str, confidence: float | None = None,
+                 why: str = "", source: str = "model", model: str | None = None) -> None:
+        """Record what kind of conversation this is.
+
+        A human's decision is final: a later model run must not quietly reclassify a
+        conversation a person already judged, because the kind decides whether
+        extraction runs at all and a silent flip changes what reaches the board.
+        """
+        if source != "human":
+            cur = self.kind_of(rec_id)
+            if cur is not None and cur["source"] == "human":
+                return
+        self.db.execute(
+            """
+            INSERT INTO conversation_kinds (recording_id, kind, confidence, why, source,
+                                            model, decided_at)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(recording_id) DO UPDATE SET
+                kind = excluded.kind, confidence = excluded.confidence,
+                why = excluded.why, source = excluded.source,
+                model = excluded.model, decided_at = excluded.decided_at
+            """,
+            (rec_id, kind, confidence, why, source, model, int(time.time())),
+        )
+        self.db.commit()
+
+    def kind_of(self, rec_id: str) -> sqlite3.Row | None:
+        return self.db.execute(
+            "SELECT * FROM conversation_kinds WHERE recording_id = ?", (rec_id,)
+        ).fetchone()
+
+    def needing_kind(self, *, force: bool = False) -> list[sqlite3.Row]:
+        """Transcribed recordings with no kind yet — or all of them, keeping humans.
+
+        `force` re-runs the model over everything, which is what a prompt change needs,
+        but `set_kind` still refuses to overwrite a human, so a re-run cannot undo a
+        sitting spent correcting it.
+        """
+        q = (f"SELECT r.* FROM recordings r WHERE r.transcript_path IS NOT NULL "
+             f"AND {self.NOT_EXCLUDED} ")
+        if not force:
+            q += ("AND NOT EXISTS (SELECT 1 FROM conversation_kinds k "
+                  "WHERE k.recording_id = r.id) ")
+        return self.db.execute(q + "ORDER BY r.started_at DESC").fetchall()
+
+    def by_kind(self, kind: str) -> list[sqlite3.Row]:
+        """Transcribed recordings of one conversation kind, newest first."""
+        return self.db.execute(
+            "SELECT r.* FROM recordings r JOIN conversation_kinds k ON k.recording_id = r.id "
+            f"WHERE k.kind = ? AND r.transcript_path IS NOT NULL AND {self.NOT_EXCLUDED} "
+            "ORDER BY r.started_at DESC", (kind,)
+        ).fetchall()
+
+    def kind_counts(self) -> dict[str, int]:
+        return {r["kind"]: r["n"] for r in self.db.execute(
+            "SELECT kind, COUNT(*) n FROM conversation_kinds GROUP BY kind ORDER BY n DESC")}
+
     # ------------------------------------------------------------------ chunks
 
     def set_chunks(self, rec_id: str, chunks: list[dict], vectors, *, model: str) -> None:
@@ -503,7 +581,7 @@ class Store:
         embedding to infer, because it cannot.
         """
         q = (
-            "SELECT c.recording_id, c.start_ms, c.text, c.vector, r.filename, r.title, r.started_at,"
+            "SELECT c.recording_id, c.idx, c.start_ms, c.text, c.vector, r.filename, r.title, r.started_at,"
             " t.tier FROM chunks c JOIN recordings r ON r.id = c.recording_id "
             "LEFT JOIN triage t ON t.recording_id = c.recording_id WHERE c.model = ? "
         )
@@ -528,6 +606,26 @@ class Store:
                   "JOIN speakers s ON s.id = rs.speaker_id WHERE s.name = ? COLLATE NOCASE) ")
             args.append(speaker)
         return self.db.execute(q + "ORDER BY c.recording_id, c.idx", args).fetchall()
+
+    def chunk_window(self, rec_id: str, idx: int, *, model: str,
+                     before: int = 1, after: int = 1) -> list[sqlite3.Row]:
+        """The chunks either side of one hit, in reading order, including the hit.
+
+        A 1200-character chunk is sized so a search result points at a findable moment,
+        which is a different job from giving a model enough to answer with. Rather than
+        re-chunk for both, a caller that needs prose asks for the neighbours here.
+
+        Same recording, so the tier decision already made about the hit still holds and
+        no new visibility question arises. Missing neighbours at the start or end of a
+        recording are simply absent — a window is best-effort, never padded.
+        """
+        if before < 0 or after < 0:
+            raise ValueError("window bounds cannot be negative")
+        return self.db.execute(
+            "SELECT idx, start_ms, text FROM chunks WHERE recording_id = ? AND model = ? "
+            "AND idx BETWEEN ? AND ? ORDER BY idx",
+            (rec_id, model, idx - before, idx + after),
+        ).fetchall()
 
     def needing_index(self, model: str) -> list[sqlite3.Row]:
         """Transcribed recordings with no chunks for this model — or none at all.
@@ -567,6 +665,24 @@ class Store:
 
     def get_action(self, action_id: int) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM actions WHERE id = ?", (action_id,)).fetchone()
+
+    def promote_action(self, action_id: int) -> bool:
+        """Lift one overflow action onto the board.
+
+        The inverse of a budget cut, and the reason the cut is safe to make: a
+        selection the owner disagrees with costs one click to undo, not a re-run.
+        """
+        row = self.db.execute("SELECT status FROM actions WHERE id = ?", (action_id,)).fetchone()
+        if row is None or row["status"] != "overflow":
+            return False
+        self.update_action(action_id, status="proposed")
+        return True
+
+    def overflow_counts(self) -> dict[str, int]:
+        """How many actions sit below the line, per recording — for the "N more" line."""
+        return {r["recording_id"]: r["n"] for r in self.db.execute(
+            "SELECT recording_id, COUNT(*) n FROM actions WHERE status = 'overflow' "
+            "GROUP BY recording_id")}
 
     def actions(self, *, status: str | None = None, recording_id: str | None = None,
                 kind: str | None = None, owner: str | None = None,

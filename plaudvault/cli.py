@@ -7,10 +7,33 @@ import sys
 import time
 from pathlib import Path
 
-from . import (auth, diarize, dispatch, evaluate, extract, freshness, notes,
-               prune, runlock, search, sentiment, service, setup_wizard, story,
-               summarize, sync, tiering, titles, transcribe)
-from . import browse, period
+from . import (
+    auth,
+    brief,
+    browse,
+    diarize,
+    dispatch,
+    evaluate,
+    extract,
+    freshness,
+    judge,
+    kinds,
+    notes,
+    period,
+    prune,
+    runlock,
+    search,
+    select,
+    sentiment,
+    service,
+    setup_wizard,
+    story,
+    summarize,
+    sync,
+    tiering,
+    titles,
+    transcribe,
+)
 from .api import PlaudClient
 from .config import ArchiveUnavailable, load
 from .store import Store
@@ -89,11 +112,194 @@ def cmd_notes(args, cfg) -> int:
     return 1 if s["failed"] else 0
 
 
+def cmd_kinds(args, cfg) -> int:
+    """Classify conversations, or show and correct the classification."""
+    with Store(cfg.db_path) as store:
+        if args.set:
+            rec_id, kind = args.set
+            if kind not in kinds.KINDS:
+                print(f"  unknown kind {kind!r} — one of: {', '.join(kinds.KINDS)}")
+                return 2
+            row = store.get(rec_id)
+            if row is None:
+                print(f"  no such recording: {rec_id}")
+                return 2
+            store.set_kind(rec_id, kind=kind, confidence=1.0, why="set by hand",
+                           source="human")
+            print(f"  {row['title'] or row['filename']} → {kind} "
+                  f"(budget {kinds.budget(kind)})")
+            return 0
+
+        if args.list:
+            counts = store.kind_counts()
+            if not counts:
+                print("  nothing classified yet — run: plaudctl kinds")
+                return 0
+            total = sum(counts.values())
+            print(f"\n  {total} classified\n")
+            for kind, (bud, desc) in kinds.KINDS.items():
+                n = counts.get(kind, 0)
+                bar = "█" * round(24 * n / max(counts.values()))
+                print(f"  {kind:11s} {n:4d}  budget {bud}  {bar}")
+                print(f"              {desc[:62]}")
+            return 0
+
+        s = kinds.run(cfg, store, limit=args.limit, force=args.force)
+    print(f"\n  classified {s['classified']}, skipped {s['skipped']} "
+          f"(no summary yet), failed {s['failed']}")
+    if s["kinds"]:
+        print("  " + ", ".join(f"{k} {n}" for k, n in sorted(s["kinds"].items())))
+    zero = [k for k in s["kinds"] if not kinds.extractable(k)]
+    if zero:
+        print(f"  {sum(s['kinds'][k] for k in zero)} of those yield no actions "
+              f"by design ({', '.join(zero)})")
+    return 1 if s["failed"] else 0
+
+
+def cmd_judge(args, cfg) -> int:
+    """Label candidate actions so "which three" can be measured instead of argued."""
+    with Store(cfg.db_path) as store:
+        truth = judge.verdicts(cfg)
+        if args.status:
+            keeps = sum(1 for v in truth.values() if v == "keep")
+            print(f"\n  {len(truth)} actions labelled — {keeps} keep, {len(truth)-keeps} drop")
+            print(f"  {judge.judged_path(cfg)}")
+            if not truth:
+                print("\n  nothing yet. `plaudctl judge` labels a sample; it is the only")
+                print("  way the board's precision becomes a number rather than a feeling.")
+            return 0
+
+        if args.measure:
+            return _measure_boards(cfg, store, truth)
+
+        pools = judge.sample(cfg, store, recordings=args.recordings, seed=args.seed,
+                             max_items=args.max_items)
+        if not pools:
+            print("  nothing left to label — every sampled recording is done")
+            return 0
+        total = sum(len(p["candidates"]) for p in pools)
+        print(f"\n  {len(pools)} recordings, {total} candidates, shown in random order.")
+        print("  For each: would you put this on your list? Judge the item, not the board.")
+        print("  Stopping early is fine — every verdict counts on its own.")
+        print("  [y] keep  [n] drop  [s] skip  [q] stop and save\n")
+
+        rows, seen = [], 0
+        for pool in pools:
+            rec = store.get(pool["recording_id"])
+            k = store.kind_of(pool["recording_id"])
+            label = titles.display(rec) if rec else pool["recording_id"]
+            print(f"\n  ── {label[:62]} [{k['kind'] if k else 'unclassified'}] ──")
+            for a in pool["candidates"]:
+                if a["id"] in truth:
+                    continue
+                seen += 1
+                print(f"\n  [{seen}/{total}] {a['text'][:100]}")
+                if a["quote"]:
+                    print(f"        said: \"{' '.join(a['quote'].split())[:110]}\"")
+                try:
+                    answer = input("        keep? [y/n/s/q] ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print("\n  stopping, saving what you decided")
+                    answer = "q"
+                if answer == "q":
+                    judge.record(cfg, rows)
+                    print(f"\n  saved {len(rows)} verdicts")
+                    return 0
+                if answer in ("y", "n"):
+                    rows.append({"action_id": a["id"], "recording_id": a["recording_id"],
+                                 "text": a["text"], "verdict": "keep" if answer == "y" else "drop"})
+        judge.record(cfg, rows)
+        keeps = sum(1 for r in rows if r["verdict"] == "keep")
+        print(f"\n  saved {len(rows)} verdicts — {keeps} keep, {len(rows)-keeps} drop")
+        print("  measure the board against them: plaudctl judge --measure")
+    return 0
+
+
+def _measure_boards(cfg, store, truth: dict) -> int:
+    """Score selection against extraction order over the labelled recordings."""
+    if not truth:
+        print("  nothing labelled yet — run `plaudctl judge` first.")
+        print("  Without it there is no number here anybody is allowed to quote.")
+        return 2
+    rids = {r["recording_id"] for r in judge.load_judged(cfg)}
+    rows = []
+    for rid in sorted(rids):
+        pool = [dict(a) for a in store.actions(recording_id=rid)]
+        if not pool:
+            continue
+        k = store.kind_of(rid)
+        kind = k["kind"] if k else "other"
+        b = kinds.budget(kind)
+        sp = summarize.summary_path(cfg, rid)
+        t = store.triage_of(rid)
+        got = select.choose(cfg, pool, summary=sp.read_text() if sp.exists() else "",
+                            kind=kind, budget=b, tier=(t["tier"] if t else None))
+        pool_ids = [a["id"] for a in pool]
+        rows.append({
+            "recording_id": rid, "kind": kind, "budget": b, "pool": len(pool),
+            "selection": judge.score_board([a["id"] for a in got["kept"]], pool_ids, truth),
+            "order": judge.score_board(pool_ids[:b], pool_ids, truth),
+            "decided": got["decided"],
+        })
+
+    def agg(key):
+        c = sum(r[key]["correct"] for r in rows)
+        n = sum(r[key]["labelled"] for r in rows)
+        kf = sum(r[key]["keepers_found"] for r in rows)
+        kp = sum(r[key]["keepers_in_pool"] for r in rows)
+        return c, n, kf, kp
+
+    print(f"\n  {len(rows)} labelled recordings, {len(truth)} verdicts\n")
+    print(f"  {'':18s} {'precision':>18s} {'recall of keepers':>20s}")
+    for key, name in (("order", "extraction order"), ("selection", "selection")):
+        c, n, kf, kp = agg(key)
+        p = f"{c}/{n} = {c/n:.0%}" if n else "no labelled picks"
+        r = f"{kf}/{kp} = {kf/kp:.0%}" if kp else "n/a"
+        print(f"  {name:18s} {p:>18s} {r:>20s}")
+    print("\n  precision is what you see on the board; recall is what the cut cost.")
+    print("  Reporting only the first would make 'keep nothing' look perfect.")
+    undecided = [r for r in rows if not r["decided"]]
+    if undecided:
+        print(f"  [{len(undecided)} recordings: selection returned nothing usable, kept in full]")
+    return 0
+
+
+def cmd_brief(args, cfg) -> int:
+    """Write an actionable brief for conversations that specified something."""
+    with Store(cfg.db_path) as store:
+        if args.show:
+            path = brief.brief_path(cfg, args.show)
+            if not path.exists():
+                print(f"  no brief for {args.show}")
+                return 2
+            print(path.read_text())
+            return 0
+        s = brief.run(cfg, store, limit=args.limit, force=args.force,
+                      cloud=getattr(args, "cloud", False))
+    print(f"\n  wrote {s['written']}, failed {s['failed']}")
+    if s["declined"]:
+        print(f"  {s['declined']} declined — read as personal rather than a specification")
+    if s.get("awaiting_confirmation"):
+        print(f"\n  {s['awaiting_confirmation']} conversations look like specifications but "
+              f"nobody has confirmed it.")
+        print("  A brief is written for an agent to act on, so a person confirms the kind first:")
+        print("    plaudctl kinds --list          # see what was proposed")
+        print("    plaudctl kinds --set <id> product")
+    if s["kept"]:
+        print(f"  {s['kept']} left alone — edited by hand since they were generated")
+    if s["written"]:
+        print(f"  {cfg.brief_dir}")
+    return 1 if s["failed"] else 0
+
+
 def cmd_extract(args, cfg) -> int:
     with Store(cfg.db_path) as store:
         s = extract.run(cfg, store, limit=args.limit, force=args.force,
-                        suggestions=True if args.suggestions else None)
+                        suggestions=True if args.suggestions else None,
+                        cloud_select=getattr(args, "cloud", False))
     print(f"\n  scanned {s['recordings']}, proposed {s['proposed']} actions, failed {s['failed']}")
+    if s.get("not_expected"):
+        print(f"  {s['not_expected']} skipped — a kind of conversation that yields none")
     print("  review them in the console: plaudctl web")
     return 1 if s["failed"] else 0
 
@@ -485,7 +691,8 @@ def cmd_search(args, cfg) -> int:
         hits = search.search(cfg, store, args.query, k=args.limit or 10,
                              include_excluded=args.excluded,
                              since=since, until=until,
-                             speaker=(getattr(args, "speaker", "") or None))
+                             speaker=(getattr(args, "speaker", "") or None),
+                             context=max(0, getattr(args, "context", 0) or 0))
     if not hits:
         with Store(cfg.db_path) as store:
             n = store.index_stats(cfg.embed_model)["chunks"]
@@ -495,10 +702,18 @@ def cmd_search(args, cfg) -> int:
         else:
             print("  no matches." if n else "  nothing indexed yet — run: plaudctl index")
         return 0
+    wide = max(0, getattr(args, "context", 0) or 0)
     for h in hits:
         print(f"\n  {h['score']:.3f}  {h['started_iso']}  {h['label'][:52]}  [{h['at']}]")
         body = " ".join(h["text"].split())
         print(f"        {body[:200]}{'…' if len(body) > 200 else ''}")
+        # The hit stays above, verbatim and at its timestamp; the window is printed
+        # under it so what you are reading around is never confused with the hit.
+        if wide and h.get("context"):
+            span = " ".join(h["context"].split())
+            print(f"\n        ── context {h['context_from']}–{h['context_to']} "
+                  f"({h['context_chunks']} chunks) ──")
+            print(f"        {span}")
     print("\n  scores are cosine similarity, not confidence — compare them to each other")
     return 0
 
@@ -506,8 +721,6 @@ def cmd_search(args, cfg) -> int:
 def cmd_story(args, cfg) -> int:
     """Draw a recording along its own duration, as SVG or an editable Excalidraw scene."""
     import json as _json
-
-    import json as _json2
     if args.arc:
         with Store(cfg.db_path) as st:
             model = story.arc_story(cfg, st, days=args.days, themes=args.themes)
@@ -634,9 +847,20 @@ def _run_stages(args, cfg) -> int:
         print(f"  [skip] {exc}")
     print("\n== notes ==")
     rc |= cmd_notes(args, cfg)
+    # Before extract, because the kind decides whether extract runs on it at all.
+    print("\n== kinds ==")
+    try:
+        rc |= cmd_kinds(args, cfg)
+    except RuntimeError as exc:
+        print(f"  [skip] {exc}")
     print("\n== extract ==")
     try:
         rc |= cmd_extract(args, cfg)
+    except RuntimeError as exc:
+        print(f"  [skip] {exc}")
+    print("\n== brief ==")
+    try:
+        rc |= cmd_brief(args, cfg)
     except RuntimeError as exc:
         print(f"  [skip] {exc}")
     print("\n== index ==")
@@ -815,6 +1039,37 @@ def main(argv=None) -> int:
         sp.add_argument("--limit", type=int)
         sp.add_argument("--force", action="store_true", help="redo already-processed items")
 
+    sp = add("brief", cmd_brief, "write an actionable brief for each product conversation")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--force", action="store_true",
+                    help="rewrite generated briefs (hand-edited ones are still kept)")
+    sp.add_argument("--show", metavar="RECORDING_ID", help="print one brief")
+    sp.add_argument("--cloud", action="store_true",
+                    help="write with cloud_model — sends the transcript, so only tiers "
+                         "in cloud_tier_scope are written")
+
+    sp = add("judge", cmd_judge, "label candidate actions, then measure the board against them")
+    sp.add_argument("--recordings", type=int, default=5,
+                    help="how many recordings to sample (default 5)")
+    sp.add_argument("--max-items", type=int, default=60, dest="max_items",
+                    help="cap the sitting (default 60); q saves and stops at any point")
+    sp.add_argument("--seed", type=int, default=0, help="sampling seed, for a reproducible set")
+    sp.add_argument("--status", action="store_true", help="how much is labelled")
+    sp.add_argument("--measure", action="store_true",
+                    help="score selection against extraction order on what is labelled")
+
+    sp = add("kinds", cmd_kinds, "classify what kind of conversation each recording is")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--force", action="store_true",
+                    help="reclassify everything (a human's kind is still kept)")
+    sp.add_argument("--list", action="store_true", help="show the breakdown, classify nothing")
+    sp.add_argument("--set", nargs=2, metavar=("RECORDING_ID", "KIND"),
+                    help="set a kind by hand; a model run will never overwrite it")
+
+    sub.choices["extract"].add_argument(
+        "--cloud", action="store_true",
+        help="choose the surviving actions with cloud_model (sends candidates and the "
+             "summary, never the transcript; obeys cloud_tier_scope)")
     sub.choices["extract"].add_argument(
         "--suggestions", action="store_true",
         help="also propose implied next steps, not just stated commitments (noisy)")
@@ -827,6 +1082,8 @@ def main(argv=None) -> int:
     sp.add_argument("query")
     sp.add_argument("--limit", type=int, help="how many hits (default 10)")
     sp.add_argument("--excluded", action="store_true", help="also search excluded recordings")
+    sp.add_argument("--context", type=int, default=0, metavar="N",
+                    help="also print N chunks either side of each hit, stitched")
     sp.add_argument("--period", default="",
                     help='narrow by when: "March", "March 2026", "2026-03-14", "last 30 days"')
     sp.add_argument("--speaker", default="", help="only recordings this named person is in")

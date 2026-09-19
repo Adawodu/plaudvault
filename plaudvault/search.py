@@ -14,6 +14,14 @@ this archive ever reaches six figures of chunks that trade changes; it is nowher
 Vectors are stored as raw float32 in the manifest beside everything else, so the
 archive stays one directory you can copy, and the index is rebuildable from transcripts
 at any time.
+
+**A hosted embedding model is refused outright, not tier-scoped.** Every other model
+call here handles one recording and can be gated by that recording's tier. Indexing is
+the exception: it sends *every sentence in the archive* — the therapy session, the
+argument, the conversation in front of the children — and it does so in one sweep with
+no per-recording decision to hang a gate on. There is no tier scope that makes that
+proportionate, so `cloud`-suffixed embedding models are rejected before the first
+request rather than filtered afterwards.
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ import time
 import httpx
 import numpy as np
 
+from . import llm
 from .config import Config
 from .store import Store
 from .transcribe import read_transcript
@@ -43,6 +52,11 @@ class EmbedError(RuntimeError):
 
 def available(cfg: Config) -> tuple[bool, str]:
     """(reachable, reason). Never raises — the console asks this on every page."""
+    if llm.model_is_cloud(cfg.embed_model):
+        return False, (
+            f"{cfg.embed_model!r} runs on Ollama's servers, and indexing would send "
+            f"every sentence in this archive there. Embeddings must be a local model."
+        )
     try:
         r = httpx.get(f"{cfg.ollama_host}/api/tags", timeout=5)
         if not r.is_success:
@@ -115,6 +129,14 @@ def embed(cfg: Config, texts: list[str], *, kind: str = "document", timeout: flo
     `kind` is "document" when indexing and "query" when searching; the two are not
     interchangeable for models that take task prefixes.
     """
+    # Checked here too, not only in available(): this is the function that actually
+    # puts text on the wire, and a caller that skipped the availability check must not
+    # be the reason the corpus leaves.
+    if llm.model_is_cloud(cfg.embed_model):
+        raise EmbedError(
+            f"refusing to embed with {cfg.embed_model!r}: it runs on Ollama's servers "
+            f"and indexing sends the whole archive. Use a local embedding model."
+        )
     pre = _prefix(cfg, kind)
     resp = httpx.post(
         f"{cfg.ollama_host}/api/embed",
@@ -129,6 +151,59 @@ def embed(cfg: Config, texts: list[str], *, kind: str = "document", timeout: flo
     arr = np.asarray(vectors, dtype=np.float32)
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
     return arr / np.maximum(norms, 1e-9)
+
+
+def _stitch(left: str, right: str) -> str:
+    """Join two adjacent chunks, dropping the overlap they share.
+
+    `chunk_transcript` re-seeds each chunk with whole tail lines of the one before, so
+    the overlap is an exact suffix of the left and prefix of the right — find the
+    longest such run and drop one copy. Without this a three-chunk window repeats
+    roughly 400 characters of speech, and a model reading it sees a sentence said
+    twice and can report it as emphasis or as two separate moments.
+
+    Falls back to a plain join when nothing matches, which is what an index built under
+    a different OVERLAP_CHARS looks like. A missed overlap reads as slight repetition;
+    a wrongly-guessed one would delete words that were actually said, so the match has
+    to be exact and reasonably long to count.
+    """
+    left, right = left.rstrip(), right.lstrip()
+    if not left:
+        return right
+    if not right:
+        return left
+    limit = min(len(left), len(right), OVERLAP_CHARS * 3)
+    for k in range(limit, 24, -1):
+        if left[-k:] == right[:k]:
+            return left + right[k:]
+    return f"{left} {right}"
+
+
+def expand(store: Store, hit: dict, *, model: str, before: int = 1, after: int = 1) -> dict:
+    """Add the neighbouring chunks of `hit` to it, as a separate field.
+
+    The hit's own `text` is left exactly as indexed. That is deliberate: it is the
+    passage sitting at the cited timestamp, and it is what a client is told to quote.
+    Context is for reasoning over and carries its own span, so a client that quotes
+    `text` can never accidentally attribute a neighbour's words to `at`.
+    """
+    if hit.get("idx") is None or (before <= 0 and after <= 0):
+        return hit
+    rows = store.chunk_window(hit["recording_id"], hit["idx"], model=model,
+                              before=before, after=after)
+    if not rows:
+        return hit
+    body = ""
+    for r in rows:
+        body = r["text"] if not body else _stitch(body, r["text"])
+    starts = [r["start_ms"] for r in rows if r["start_ms"] is not None]
+    return {
+        **hit,
+        "context": body,
+        "context_from": _hhmmss(min(starts)) if starts else "",
+        "context_to": _hhmmss(max(starts)) if starts else "",
+        "context_chunks": len(rows),
+    }
 
 
 def run(cfg: Config, store: Store, *, limit: int | None = None, force: bool = False) -> dict:
@@ -182,6 +257,7 @@ def search(
     until: int | None = None,
     tiers: set[str] | None = None,
     speaker: str | None = None,
+    context: int = 0,
 ) -> list[dict]:
     """Nearest chunks to `query`, best first, one hit per recording-moment.
 
@@ -189,6 +265,10 @@ def search(
     *before* ranking. A stated constraint is not something the embedding can be trusted
     to honour — asked for August, an unfiltered search returned a September recording —
     so anything the caller can state is applied as a filter and never as a hint.
+
+    `context` (chunks either side) adds a stitched `context` field to each hit for a
+    caller that has to answer from the text rather than point at it. The hit's own
+    `text` never changes: it is the passage at the cited timestamp.
 
     Scores are raw cosine similarity. They are NOT probabilities and there is no
     threshold below which a result is "wrong" — this model puts most unrelated English
@@ -223,6 +303,7 @@ def search(
         out.append(
             {
                 "recording_id": r["recording_id"],
+                "idx": r["idx"],
                 "filename": r["filename"],
                 # A title if the titler produced one, the filename otherwise. Newer
                 # recordings are named for their timestamp, so showing the filename
@@ -239,6 +320,9 @@ def search(
         )
         if len(out) >= k:
             break
+    if context > 0:
+        out = [expand(store, h, model=cfg.embed_model, before=context, after=context)
+               for h in out]
     return out
 
 
