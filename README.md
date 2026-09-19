@@ -195,6 +195,60 @@ This matters more than it sounds. A wearable recorder captures whoever is in ear
 family, colleagues, strangers — and none of them opted in. Defaulting personal
 recordings to *local* is the difference between an archive and a surveillance corpus.
 
+## One file, several conversations
+
+Leave the pin running all day and you get one recording holding a standup, a school run
+and a client call. Everything downstream is per-conversation and all of it is wrong for
+that file: one title for three topics, one summary that averages them, one action budget
+spread across material with nothing in common.
+
+```bash
+plaudctl segments                      # find the boundaries
+plaudctl segments --show <id>          # see them
+plaudctl segments --confirm <id>       # make them permanent
+plaudctl segments --clear <id>         # back to one conversation
+```
+
+**Nothing is ever cut.** A segment is a time range plus an identity. The audio file stays
+exactly as it came off the device, the transcript stays one document, and a segment reads
+a *view* of it rather than a copy. Delete every segment and the archive is byte-for-byte
+what it was.
+
+Two views over one master:
+
+| | |
+|---|---|
+| **Library** | every recording as it arrived — the source of truth, never reorganised |
+| **Working view** | the conversations inside them, where titles, kinds, budgets, actions and briefs belong |
+
+On the reference archive: 94 recordings in the library, 20 of which hold more than one
+conversation — 126 conversations in the working view.
+
+A recording with no segmentation **is** one segment covering the whole file. That is not
+a special case; it is what an unsegmented recording has always meant, so every existing
+recording had a valid segment list the day this shipped, with nothing backfilled.
+
+**Boundaries are proposed, then confirmed.** A proposal can be replaced by a later run; a
+boundary you confirm is never moved by one. Every decision downstream — a tier, an
+accepted action, a brief — hangs off a boundary, and silently moving one orphans all of
+them.
+
+**Silence is the signal, and a change of voices is not.** Both were built. Scoring the
+turnover in diarization labels produced 90 conversations from one 4.5-hour recording and
+19 from a single interview — the labels are noisy and unnamed, so the set of them churns
+whether or not anyone left the room. It was measuring the diarizer. A three-minute
+silence gives 5 conversations for that same 4.5-hour file, and leaves a 47-minute prayer
+session whole. Voice turnover is still shown as evidence next to a silence; it cannot
+open a boundary on its own.
+
+Duration alone does not make a conversation either: a span with under a minute of actual
+speech is folded into the one before it, because two long silences in a row leave a
+sliver of dead air that duration calls a conversation and the audio does not.
+
+What silence cannot catch is one conversation ending and the next starting with no pause
+— a change of subject, visible only in what was said. That needs a model reading the
+whole transcript, which is what `cloud_model` is for. Not built yet.
+
 ## Actions
 
 ### What kind of conversation was this?

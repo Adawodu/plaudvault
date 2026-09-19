@@ -23,6 +23,7 @@ from . import (
     prune,
     runlock,
     search,
+    segment,
     select,
     sentiment,
     service,
@@ -110,6 +111,70 @@ def cmd_notes(args, cfg) -> int:
         s = notes.run(cfg, store, limit=args.limit, force=args.force)
     print(f"\n  wrote {s['written']} notes, failed {s['failed']}")
     return 1 if s["failed"] else 0
+
+
+def _hhmm(ms: int) -> str:
+    sec = int(ms) // 1000
+    return f"{sec // 3600}:{(sec % 3600) // 60:02d}:{sec % 60:02d}"
+
+
+def cmd_segments(args, cfg) -> int:
+    """Find the conversations inside a recording. Never touches the audio."""
+    with Store(cfg.db_path) as store:
+        if args.confirm:
+            n = store.confirm_segments(args.confirm)
+            print(f"  {n} boundaries confirmed — a re-run will not move them"
+                  if n else "  nothing to confirm: that recording has no segmentation")
+            return 0 if n else 2
+        if args.clear:
+            n = store.clear_segments(args.clear)
+            print(f"  cleared {n} — back to one conversation. "
+                  f"The audio and transcript were never touched.")
+            return 0
+
+        if args.show:
+            rec = store.get(args.show)
+            if rec is None:
+                print(f"  no such recording: {args.show}")
+                return 2
+            segs = store.segments(args.show)
+            print(f"\n  {titles.display(rec)}")
+            print(f"  {len(segs)} conversation(s) · "
+                  f"{'confirmed' if store.is_segmented(args.show) and segs[0]['source'] == 'human' else segs[0]['source']}\n")
+            for sg in segs:
+                print(f"  [{sg['idx']}] {_hhmm(sg['start_ms'])}–{_hhmm(sg['end_ms'])}"
+                      f"  {sg.get('method') or ''}")
+            return 0
+
+        rows = [r for r in store.all() if r["transcript_path"]]
+        if args.recording:
+            rows = [r for r in rows if r["id"] == args.recording]
+        if not args.force:
+            rows = [r for r in rows if not store.is_segmented(r["id"])]
+        if args.limit:
+            rows = rows[: args.limit]
+
+        print(f"  {len(rows)} recordings to look at for conversation boundaries")
+        split = skipped = kept = 0
+        for r in rows:
+            got = segment.propose(cfg, store, r["id"])
+            if not got["spans"]:
+                skipped += 1
+                continue
+            n = store.set_segments(r["id"], got["spans"], method="silence>=180s")
+            if not n:
+                kept += 1          # a human confirmed this one; left alone
+                continue
+            split += 1
+            print(f"  {titles.display(r)[:52]} → {n} conversations")
+            for sp in got["spans"]:
+                print(f"      {_hhmm(sp['start_ms'])}–{_hhmm(sp['end_ms'])}  {sp['why']}")
+    print(f"\n  segmented {split}, left whole {skipped}"
+          + (f", {kept} already confirmed by hand" if kept else ""))
+    print("  nothing was cut: segments are a view, the recordings are untouched.")
+    if split:
+        print("  confirm one you agree with:  plaudctl segments --confirm <recording_id>")
+    return 0
 
 
 def cmd_kinds(args, cfg) -> int:
@@ -1057,6 +1122,17 @@ def main(argv=None) -> int:
     sp.add_argument("--status", action="store_true", help="how much is labelled")
     sp.add_argument("--measure", action="store_true",
                     help="score selection against extraction order on what is labelled")
+
+    sp = add("segments", cmd_segments,
+             "find the separate conversations inside a recording (a view, not a split)")
+    sp.add_argument("--recording", metavar="ID", help="just this one")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--force", action="store_true",
+                    help="re-propose for recordings already segmented (confirmed ones are kept)")
+    sp.add_argument("--show", metavar="ID", help="print one recording's conversations")
+    sp.add_argument("--confirm", metavar="ID",
+                    help="make this segmentation permanent; re-runs will not move it")
+    sp.add_argument("--clear", metavar="ID", help="back to one conversation")
 
     sp = add("kinds", cmd_kinds, "classify what kind of conversation each recording is")
     sp.add_argument("--limit", type=int)

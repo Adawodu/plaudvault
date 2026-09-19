@@ -123,6 +123,33 @@ CREATE TABLE IF NOT EXISTS conversation_kinds (
     decided_at   INTEGER NOT NULL
 );
 
+-- A conversation inside a recording. A pin left running all day produces one file
+-- holding several unrelated conversations, and title, summary, tone, kind and budget
+-- are all per-conversation and all wrong for such a file.
+--
+-- This is a VIEW over the recording, never a split of it. No audio is moved, copied or
+-- cut: a segment is a time range plus an identity, and the file on disk stays exactly
+-- as it came off the device. Delete every row here and the archive is unchanged.
+--
+-- `source` carries the same rule as speaker names and conversation kinds: a boundary a
+-- person confirmed is precious and a re-run never moves it, while a proposed one is
+-- derived and may be replaced. Without that, re-segmenting would silently orphan every
+-- decision attached to the old boundaries.
+CREATE TABLE IF NOT EXISTS segments (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id TEXT NOT NULL REFERENCES recordings(id),
+    idx          INTEGER NOT NULL,          -- order within the recording, from 0
+    start_ms     INTEGER NOT NULL,
+    end_ms       INTEGER NOT NULL,
+    title        TEXT,
+    source       TEXT NOT NULL DEFAULT 'model',   -- model | human
+    method       TEXT,                      -- how it was proposed, for the record
+    confidence   REAL,
+    created_at   INTEGER NOT NULL,
+    UNIQUE(recording_id, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_segments_rec ON segments(recording_id);
+
 -- Transcript windows and their embeddings, for semantic search. The vector is raw
 -- float32 bytes; `dim` and `model` are stored so a change of embedding model is
 -- detectable rather than silently comparing incompatible vectors. Wholly derived from
@@ -548,6 +575,82 @@ class Store:
     def kind_counts(self) -> dict[str, int]:
         return {r["kind"]: r["n"] for r in self.db.execute(
             "SELECT kind, COUNT(*) n FROM conversation_kinds GROUP BY kind ORDER BY n DESC")}
+
+    # ------------------------------------------------------------- segments
+
+    def segments(self, rec_id: str) -> list[dict]:
+        """The conversations inside one recording, in order.
+
+        **A recording with no stored segmentation is one segment spanning the whole
+        file.** That is not a special case to handle at every call site — it is what an
+        unsegmented recording has always meant, made explicit. Every existing recording
+        therefore has a valid segment list on the day this ships, with nothing
+        backfilled and nothing rewritten, and the caller never has to ask which world it
+        is in.
+
+        The implicit segment is not stored. Writing 94 rows that say "the whole thing"
+        would turn a derived convenience into state that can drift from the recording it
+        describes.
+        """
+        rows = self.db.execute(
+            "SELECT * FROM segments WHERE recording_id = ? ORDER BY idx", (rec_id,)
+        ).fetchall()
+        if rows:
+            return [dict(r) for r in rows]
+        rec = self.get(rec_id)
+        if rec is None:
+            return []
+        return [{
+            "id": None, "recording_id": rec_id, "idx": 0, "start_ms": 0,
+            "end_ms": int((rec["duration_s"] or 0) * 1000),
+            "title": rec["title"], "source": "implicit", "method": "whole recording",
+            "confidence": None, "created_at": rec["downloaded_at"],
+        }]
+
+    def is_segmented(self, rec_id: str) -> bool:
+        return bool(self.db.execute(
+            "SELECT 1 FROM segments WHERE recording_id = ? LIMIT 1", (rec_id,)).fetchone())
+
+    def set_segments(self, rec_id: str, spans: list[dict], *, source: str = "model",
+                     method: str = "") -> int:
+        """Replace a recording's proposed segmentation. Confirmed boundaries survive.
+
+        Whole-recording swap in one transaction, like the search index: a half-written
+        segmentation would leave conversations pointing at the wrong minutes. A
+        segmentation a person has confirmed is not replaced by a model run at all —
+        re-running must never quietly move a boundary somebody already agreed with.
+        """
+        if source != "human" and self.db.execute(
+            "SELECT 1 FROM segments WHERE recording_id = ? AND source = 'human' LIMIT 1",
+            (rec_id,),
+        ).fetchone():
+            return 0
+        now = int(time.time())
+        with self.db:
+            self.db.execute("DELETE FROM segments WHERE recording_id = ?", (rec_id,))
+            self.db.executemany(
+                "INSERT INTO segments (recording_id, idx, start_ms, end_ms, title, "
+                "source, method, confidence, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                [
+                    (rec_id, i, int(sp["start_ms"]), int(sp["end_ms"]),
+                     sp.get("title"), source, method, sp.get("confidence"), now)
+                    for i, sp in enumerate(spans)
+                ],
+            )
+        return len(spans)
+
+    def confirm_segments(self, rec_id: str) -> int:
+        """Make this recording's segmentation precious. A re-run will not move it."""
+        cur = self.db.execute(
+            "UPDATE segments SET source = 'human' WHERE recording_id = ?", (rec_id,))
+        self.db.commit()
+        return cur.rowcount
+
+    def clear_segments(self, rec_id: str) -> int:
+        """Back to one conversation. Derived data only — the recording is untouched."""
+        cur = self.db.execute("DELETE FROM segments WHERE recording_id = ?", (rec_id,))
+        self.db.commit()
+        return cur.rowcount
 
     # ------------------------------------------------------------------ chunks
 

@@ -763,6 +763,60 @@ endpoint would, and a tier outside the scope **raises rather than falling back**
 local model — a silent downgrade would leave two models' work on one board with nothing
 recording which wrote what (the same argument as D14's corollary about sentiment).
 
+### D36 — The recording is the master; conversations are a view over it
+A pin left running all day produces one file holding several unrelated conversations.
+Title, summary, tone, kind and action budget are all per-conversation and all wrong for
+such a file, and this turned up three separate times while building D30-D33: it broke
+the budget on the worst recordings, it made the classifier call them `other`, and it
+produced a brief for a conversation that was mostly a personal argument.
+
+The obvious fix — split the file into several recordings — is refused. D24 says the
+archive is browsable through links and is never renamed, and splitting is a rename of
+the most fundamental kind: it would rewrite `recording_id`s already cited in actions and
+briefs, invalidate the `stack/` mirror, and re-key the search index. More importantly it
+would edit the one thing in this archive that cannot be rebuilt.
+
+**So no audio is ever cut, copied or moved.** A segment is a time range plus an
+identity. The file on disk stays exactly as it came off the device, the transcript stays
+one document, and `segment.transcript_for()` reads a view of it rather than a copy.
+Delete every row in `segments` and the archive is byte-for-byte what it was. Two views,
+one master: the **library** is 94 recordings and always will be; the **working view** is
+126 conversations, and it is where titles, kinds, budgets, actions and briefs belong.
+
+**An unsegmented recording is one segment spanning the whole file**, computed and never
+stored. That is not a special case bolted on at every call site — it is what an
+unsegmented recording has always meant, made explicit, so all 94 existing recordings had
+a valid segment list the day this shipped with nothing backfilled. Storing 94 rows that
+each say "the whole thing" would turn a derived convenience into state that can drift
+from the recording it describes.
+
+**Proposed boundaries are derived; confirmed ones are precious.** Every decision
+downstream — a tier, an accepted action, a brief — hangs off a boundary, so a re-run
+that silently moved one would orphan all of them with nothing in the data saying when.
+Same rule as a confirmed speaker name (D18) and a hand-set conversation kind (D30).
+
+**Silence is the signal. A change of cast was built, measured, and demoted.** Both
+looked equally promising. Scoring turnover in the set of diarization labels produced
+**90 conversations from one 4.5-hour recording and 19 from a single 55-minute
+interview** — because the labels are noisy and unnamed (218 unnamed voices across 73
+recordings here), so the label set in any sliding window churns whether or not anybody
+left the room. It was measuring the diarizer. Silence at three minutes gives 5
+conversations for a 4.5-hour file and 4 for a 5-hour one, and leaves a 47-minute prayer
+session whole — correct, since that recording's problem was always its kind. Turnover is
+still reported as evidence beside a silence that stands on its own; it can no longer
+open a boundary by itself.
+
+**Duration does not make a conversation; speech does.** Two long silences in a row leave
+a sliver between them, and one such span on a real recording ran seven minutes and held
+368 characters of speech. A span with under a minute of actual talking is folded
+backwards into the conversation before it — folded rather than dropped, because a span
+belonging to no segment is archive nobody can reach through the working view.
+
+**What silence cannot catch** is one conversation ending and the next starting with no
+pause. That is a change of subject, visible only in what was said, and for a three-hour
+recording it needs a model that can hold the whole transcript at once — which is what
+D35's `cloud_model` and the `num_ctx` fix exist for. Not built yet.
+
 ### D14 — qwen3:8b, not the largest model available
 `qwen3.8` (27.3B, Q4_K_M, 17.7 GB) was pulled and **cannot load** on a 24 GB machine:
 5m04s of thrashing, swap climbing, then `timed out waiting for llama-server to start`,
@@ -864,7 +918,7 @@ Ordered within each tier by expected value, not effort. Nothing here is committe
 |---|---|---|
 | B14 | **A verified golden set** | B3 built the instrument; every one of its 48 queries is still `verified: false`, because each was written *from* the recording it is scored against. That measures a strictly easier task than the real one, so the harness currently has no number anybody is allowed to quote. Queries written from memory, before looking, are the fix. Blocks B4, B5 and D-open-1, all of which are comparisons against a baseline. |
 | B16 | **Due-date resolution during extraction** | "By Friday" has to become a date while the transcript is in front of the model, or every calendar invite needs a human to retype it. 4 of 681 actions carry one. |
-| B15 | **Split a recording at conversation boundaries** — *promoted: this now blocks B8's worst cases.* | A pin left running produces one file holding several unrelated conversations. Title, summary, tone and tier are all per-recording and all wrong for such a file, and its chunk count lets it dominate retrieval. Diarization already knows where the voices change; a gap plus a speaker-set change is most of a boundary detector. |
+| B15 | ~~Split a recording at conversation boundaries~~ — **shipped as D36**, as a view rather than a split. What remains is the second signal: a boundary with no silence, which needs a model reading the whole transcript. | A pin left running produces one file holding several unrelated conversations. Title, summary, tone and tier are all per-recording and all wrong for such a file, and its chunk count lets it dominate retrieval. Diarization already knows where the voices change; a gap plus a speaker-set change is most of a boundary detector. |
 
 ### Later — valuable, design not settled
 
