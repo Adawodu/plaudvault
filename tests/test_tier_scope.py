@@ -142,3 +142,31 @@ def test_the_stack_directory_holds_copies_not_links(tmp_path):
     cfg = _Cfg(db_path=db, root=tmp_path)
     tiering.sync(cfg, st)
     assert not (tiering.stack_dir(cfg) / "r1.txt").is_symlink()
+
+
+def test_an_agent_cannot_write_onto_a_board_it_cannot_read(tmp_path, monkeypatch):
+    """The tier scope bounds writing as well as reading. "Proposals are harmless" is
+    not the argument — the board is the owner's, and an entry referencing a
+    conversation this client was never shown is a scope violation whichever direction
+    the data moved."""
+    db = tmp_path / "m.sqlite"
+    st = _seed(db, [("r1", "local"), ("r2", "stack")])
+    cfg = _Cfg(db_path=db, tiers=("stack",), root=tmp_path)
+    monkeypatch.setattr(srv, "_cfg", lambda: cfg)
+    monkeypatch.setattr(srv, "_TIER_OVERRIDE", None)
+
+    assert "outside this client's tier scope" in srv.propose_action("do a thing", "r1")
+    assert st.actions(recording_id="r1") == []
+
+    assert "action_id" in srv.propose_action("do a thing", "r2")
+    assert len(st.actions(recording_id="r2")) == 1
+
+
+def test_a_proposal_can_name_the_conversation_it_came_from(tmp_path, monkeypatch):
+    db = tmp_path / "m.sqlite"
+    st = _seed(db, [("r1", "stack")])
+    cfg = _Cfg(db_path=db, tiers=("stack",), root=tmp_path)
+    monkeypatch.setattr(srv, "_cfg", lambda: cfg)
+    monkeypatch.setattr(srv, "_TIER_OVERRIDE", None)
+    srv.propose_action("do a thing", "r1", segment=2)
+    assert st.actions(recording_id="r1", segment_idx=2)

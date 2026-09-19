@@ -442,21 +442,35 @@ def report_task(dispatch_id: int, ok: bool, result: str = "", error: str = "") -
 
 @mcp.tool()
 def propose_action(text: str, recording_id: str = "", owner: str = "",
-                   quote: str = "") -> str:
+                   quote: str = "", segment: int = 0) -> str:
     """Put a commitment you noticed onto the owner's board as a PROPOSAL.
 
     It lands unaccepted and does nothing until a human accepts it — the same status
     the archive's own extractor writes into. Use it when a conversation you were given
     contains something the extractor missed; do not use it to record your own plans.
+
+    `segment` files it under the conversation it came from, for a recording that holds
+    more than one. `get_recording` reports how many a recording has.
     """
     cfg = _cfg()
     if not text.strip():
         return json.dumps({"error": "text is required"})
     with Store(cfg.db_path) as store:
-        if recording_id and store.get(recording_id) is None:
-            return json.dumps({"error": "no such recording"})
+        if recording_id:
+            row = store.get(recording_id)
+            if row is None:
+                return json.dumps({"error": "no such recording"})
+            # The tier scope bounds writing as well as reading. A client that cannot
+            # read a recording has no business attaching anything to its board, and
+            # "proposals are harmless" is not the argument — the board is the owner's,
+            # and an entry on it referencing a conversation this client was never shown
+            # is a scope violation whichever direction the data moved.
+            t = store.triage_of(recording_id)
+            if not _visible(cfg, store, t["tier"] if t else None):
+                return json.dumps({"error": "recording is outside this client's tier scope"})
         aid = store.add_action(
             recording_id=recording_id or None,
+            segment_idx=max(0, int(segment)),
             text=text.strip()[:500],
             kind="manual",
             owner=owner.strip()[:100],
