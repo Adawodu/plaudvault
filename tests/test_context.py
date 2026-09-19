@@ -134,3 +134,42 @@ def test_a_recording_of_one_chunk_yields_context_equal_to_the_hit(tmp_path):
     hit = {"recording_id": "r1", "idx": 0, "text": "alpha only"}
     got = search.expand(st, hit, model="m", before=2, after=2)
     assert got["context"] == "alpha only"
+
+
+# ------------------------------------- a window must stay in one conversation
+
+def test_a_window_never_crosses_into_another_conversation(tmp_path):
+    """Chunks are cut at 1200 characters with no idea where a conversation ends, so on
+    a file holding several the neighbours of a hit near a boundary belong to a
+    different discussion. Stitching them hands a model two unrelated conversations as
+    continuous speech — a more confident kind of wrong than no context at all. Measured
+    at 56 such windows on the reference archive before this."""
+    st = _seed(tmp_path / "m.sqlite", ["alpha", "bravo", "charlie", "delta"])
+    st.db.execute("UPDATE recordings SET duration_s = 600 WHERE id = 'r1'")
+    st.db.commit()
+    # chunks sit at 0, 60s, 120s, 180s; the conversation ends at 120s
+    st.set_segments("r1", [{"start_ms": 0, "end_ms": 120_000},
+                           {"start_ms": 120_000, "end_ms": 600_000}])
+
+    rows = st.chunk_window("r1", 1, model="m", before=1, after=1)
+    assert [r["text"] for r in rows] == ["alpha", "bravo"]     # 'charlie' is next door
+
+    rows = st.chunk_window("r1", 2, model="m", before=1, after=1)
+    assert [r["text"] for r in rows] == ["charlie", "delta"]
+
+
+def test_an_unsegmented_recording_windows_freely(tmp_path):
+    """One conversation, no boundary to respect — today's behaviour, unchanged."""
+    st = _seed(tmp_path / "m.sqlite", ["alpha", "bravo", "charlie"])
+    rows = st.chunk_window("r1", 1, model="m", before=1, after=1)
+    assert [r["text"] for r in rows] == ["alpha", "bravo", "charlie"]
+
+
+def test_a_chunk_with_no_timestamp_does_not_lose_its_window(tmp_path):
+    """An untimed chunk cannot be placed in a conversation, and dropping its
+    neighbours would silently shrink context for a recording that never had the
+    problem."""
+    st = _seed(tmp_path / "m.sqlite", ["alpha", "bravo", "charlie"])
+    st.db.execute("UPDATE chunks SET start_ms = NULL WHERE idx = 1")
+    st.db.commit()
+    assert len(st.chunk_window("r1", 1, model="m", before=1, after=1)) == 3

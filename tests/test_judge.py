@@ -27,8 +27,11 @@ class _Cfg:
 def _store(db, per_recording=6, recordings=("r1", "r2")):
     st = Store(db)
     for rid in recordings:
-        st.db.execute("INSERT INTO recordings (id, filename, started_at, duration_s) VALUES (?,?,?,?)",
-                      (rid, f"{rid}.mp3", T0, 600.0))
+        # transcript_path matters: the working view is built from transcribed
+        # recordings, so a fixture without one has no conversations to sample.
+        st.db.execute("INSERT INTO recordings (id, filename, started_at, duration_s,"
+                      " transcript_path, downloaded_at) VALUES (?,?,?,?,?,?)",
+                      (rid, f"{rid}.mp3", T0, 600.0, f"/tmp/{rid}.txt", T0))
         st.db.execute("INSERT INTO conversation_kinds (recording_id, kind, source, decided_at)"
                       " VALUES (?,?,?,?)", (rid, "working", "model", T0))
         for i in range(per_recording):
@@ -146,3 +149,28 @@ def test_a_single_pool_larger_than_the_cap_is_still_offered(tmp_path):
     st = _store(tmp_path / "m.sqlite", per_recording=30, recordings=("r1",))
     pools = judge.sample(_Cfg(tmp_path), st, recordings=1, max_items=10)
     assert len(pools) == 1 and len(pools[0]["candidates"]) == 30
+
+
+def test_the_set_samples_conversations_not_files(tmp_path):
+    """A file holding a standup and a school run has two boards with two budgets.
+    Pooling their candidates together would measure a board no version of this product
+    ever shows anybody."""
+    st = _store(tmp_path / "m.sqlite", per_recording=8, recordings=("r1",))
+    st.set_segments("r1", [{"start_ms": 0, "end_ms": 300_000},
+                           {"start_ms": 300_000, "end_ms": 600_000}])
+    # half the actions were said in each conversation
+    ids = [a["id"] for a in st.actions(recording_id="r1")]
+    for i in ids[4:]:
+        st.update_action(i, segment_idx=1)
+
+    pools = judge.sample(_Cfg(tmp_path), st, recordings=4)
+    assert len(pools) == 2
+    assert {p["segment_idx"] for p in pools} == {0, 1}
+    assert all(len(p["candidates"]) == 4 for p in pools)
+
+
+def test_a_pool_carries_the_conversation_it_belongs_to(tmp_path):
+    st = _store(tmp_path / "m.sqlite", per_recording=5, recordings=("r1",))
+    pools = judge.sample(_Cfg(tmp_path), st, recordings=1)
+    assert pools[0]["segment_idx"] == 0
+    assert pools[0]["label"]

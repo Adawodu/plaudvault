@@ -253,9 +253,8 @@ def cmd_judge(args, cfg) -> int:
 
         rows, seen = [], 0
         for pool in pools:
-            rec = store.get(pool["recording_id"])
-            k = store.kind_of(pool["recording_id"])
-            label = titles.display(rec) if rec else pool["recording_id"]
+            k = store.kind_of(pool["recording_id"], pool.get("segment_idx", 0))
+            label = pool.get("label") or pool["recording_id"]
             print(f"\n  ── {label[:62]} [{k['kind'] if k else 'unclassified'}] ──")
             for a in pool["candidates"]:
                 if a["id"] in truth:
@@ -289,18 +288,24 @@ def _measure_boards(cfg, store, truth: dict) -> int:
         print("  nothing labelled yet — run `plaudctl judge` first.")
         print("  Without it there is no number here anybody is allowed to quote.")
         return 2
-    rids = {r["recording_id"] for r in judge.load_judged(cfg)}
+    # Scored per conversation, with that conversation's own kind and budget — the
+    # board a person is actually shown. Judged verdicts name an action, and an action
+    # knows which conversation it came from.
+    judged_ids = set(truth)
     rows = []
-    for rid in sorted(rids):
-        pool = [dict(a) for a in store.actions(recording_id=rid)]
-        if not pool:
+    for conv in store.conversations():
+        pool = [dict(a) for a in store.actions(recording_id=conv["recording_id"],
+                                               segment_idx=conv["segment_idx"])]
+        if not pool or not any(a["id"] in judged_ids for a in pool):
             continue
-        k = store.kind_of(rid)
+        rid = conv["recording_id"]
+        k = store.kind_of(rid, conv["segment_idx"])
         kind = k["kind"] if k else "other"
         b = kinds.budget(kind)
         sp = summarize.summary_path(cfg, rid)
         t = store.triage_of(rid)
-        got = select.choose(cfg, pool, summary=sp.read_text() if sp.exists() else "",
+        context = (sp.read_text() if sp.exists() and not conv["segmented"] else "")
+        got = select.choose(cfg, pool, summary=context,
                             kind=kind, budget=b, tier=(t["tier"] if t else None))
         pool_ids = [a["id"] for a in pool]
         rows.append({
@@ -317,7 +322,7 @@ def _measure_boards(cfg, store, truth: dict) -> int:
         kp = sum(r[key]["keepers_in_pool"] for r in rows)
         return c, n, kf, kp
 
-    print(f"\n  {len(rows)} labelled recordings, {len(truth)} verdicts\n")
+    print(f"\n  {len(rows)} labelled conversations, {len(truth)} verdicts\n")
     print(f"  {'':18s} {'precision':>18s} {'recall of keepers':>20s}")
     for key, name in (("order", "extraction order"), ("selection", "selection")):
         c, n, kf, kp = agg(key)

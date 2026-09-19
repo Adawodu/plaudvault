@@ -82,21 +82,22 @@ def sample(cfg: Config, store: Store, *, recordings: int = 5, seed: int = 0,
     halfway is how the bulk-drop history happened in the first place.
     """
     done = set(verdicts(cfg))
-    by_kind: dict[str, list[str]] = {}
-    for row in store.db.execute(
-        "SELECT a.recording_id rid, COALESCE(k.kind, 'unclassified') kind, COUNT(*) n "
-        "FROM actions a LEFT JOIN conversation_kinds k ON k.recording_id = a.recording_id "
-        "GROUP BY a.recording_id HAVING n >= 3"
-    ):
-        by_kind.setdefault(row["kind"], []).append(row["rid"])
+    # Per conversation, not per recording. A file holding a standup and a school run
+    # has two boards with two budgets, and pooling their candidates together would
+    # measure a board that no version of this product ever shows anybody.
+    by_kind: dict[str, list[dict]] = {}
+    for conv in store.conversations():
+        k = store.kind_of(conv["recording_id"], conv["segment_idx"])
+        by_kind.setdefault(k["kind"] if k else "unclassified", []).append(conv)
 
     rng = random.Random(seed)
-    for rids in by_kind.values():
-        rng.shuffle(rids)
+    for convs in by_kind.values():
+        convs.sort(key=lambda c: (c["recording_id"], c["segment_idx"]))
+        rng.shuffle(convs)
 
     # Round-robin across kinds so a rare kind is represented before a common one is
     # exhausted.
-    picked: list[str] = []
+    picked: list[dict] = []
     order = sorted(by_kind)
     while len(picked) < recordings and any(by_kind[k] for k in order):
         for k in order:
@@ -106,8 +107,9 @@ def sample(cfg: Config, store: Store, *, recordings: int = 5, seed: int = 0,
                 picked.append(by_kind[k].pop())
 
     pools, budgeted = [], 0
-    for rid in picked:
-        rows = [dict(a) for a in store.actions(recording_id=rid)]
+    for conv in picked:
+        rows = [dict(a) for a in store.actions(recording_id=conv["recording_id"],
+                                               segment_idx=conv["segment_idx"])]
         if len(rows) < MIN_SURPLUS + 1:
             continue
         unlabelled = [a for a in rows if a["id"] not in done]
@@ -116,7 +118,9 @@ def sample(cfg: Config, store: Store, *, recordings: int = 5, seed: int = 0,
         if budgeted and budgeted + len(unlabelled) > max_items:
             continue
         rng.shuffle(rows)          # never show them in extraction order
-        pools.append({"recording_id": rid, "candidates": rows})
+        pools.append({"recording_id": conv["recording_id"],
+                      "segment_idx": conv["segment_idx"],
+                      "label": conv["label"], "candidates": rows})
         budgeted += len(unlabelled)
         if budgeted >= max_items:
             break
