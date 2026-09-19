@@ -146,7 +146,11 @@ def generate(cfg: Config, prompt: str, *, temperature: float = 0.2, timeout: flo
                 "prompt": prompt,
                 "stream": False,
                 "think": False,
-                "options": {"temperature": temperature, "num_ctx": 8192},
+                # A hosted model is reached for precisely when 8192 is the
+                # constraint, so the window travels with the provider rather than
+                # being fixed at what this machine can hold.
+                "options": {"temperature": temperature,
+                            "num_ctx": int(getattr(cfg, "llm_num_ctx", 8192) or 8192)},
             },
             timeout=timeout,
         )
@@ -195,6 +199,9 @@ def with_cloud(cfg: Config) -> Config:
             '    cloud_model = "gpt-oss:120b-cloud"\n'
             '    cloud_tier_scope = "stack"'
         )
+    ctx = cfg.cloud_num_ctx or cfg.llm_num_ctx
     if model_is_cloud(cfg.cloud_model):
-        return replace(cfg, llm_provider="ollama", ollama_model=cfg.cloud_model)
-    return replace(cfg, llm_provider="openai", openai_model=cfg.cloud_model)
+        return replace(cfg, llm_provider="ollama", ollama_model=cfg.cloud_model,
+                       llm_num_ctx=ctx)
+    return replace(cfg, llm_provider="openai", openai_model=cfg.cloud_model,
+                   llm_num_ctx=ctx)

@@ -272,6 +272,8 @@ def test_selection_can_run_on_a_larger_model_while_extraction_stays_local(tmp_pa
         openai_model: str = "x"
         cloud_model: str = "gpt-oss:120b-cloud"
         cloud_tier_scope: str = "stack"
+        llm_num_ctx: int = 8192
+        cloud_num_ctx: int = 131072
         summary_dir = None
 
         @property
@@ -307,7 +309,29 @@ def test_asking_for_the_cloud_without_configuring_it_is_an_error_not_a_fallback(
     @dataclass
     class Cfg:
         cloud_model: str = ""
+        llm_num_ctx: int = 8192
+        cloud_num_ctx: int = 131072
 
     with pytest.raises(llm.LLMError) as exc:
         llm.with_cloud(Cfg())
     assert "cloud_tier_scope" in str(exc.value)
+
+
+def test_the_context_window_travels_with_the_provider():
+    """8192 is what a local 8B holds on a 24 GB machine. Reaching for a hosted model
+    is precisely the case where that number is the constraint, so a cloud config that
+    kept it would be a 1M-token model addressed through an 8k window."""
+    from dataclasses import dataclass
+
+    from plaudvault import llm
+
+    @dataclass
+    class Cfg:
+        cloud_model: str = "glm-5.3:cloud"
+        llm_num_ctx: int = 8192
+        cloud_num_ctx: int = 131072
+        llm_provider: str = "ollama"
+        ollama_model: str = "qwen3:latest"
+        openai_model: str = ""
+
+    assert llm.with_cloud(Cfg()).llm_num_ctx == 131072

@@ -80,6 +80,11 @@ DEFAULTS: dict = {
     # never reached, whatever flag is passed. An Ollama cloud name ends in `-cloud`
     # (`gpt-oss:120b-cloud`); anything else is treated as an `openai` endpoint model.
     "cloud_model": "",
+    # How much the model is allowed to see at once. 8192 is what a local 8B holds on a
+    # 24 GB machine without thrashing; a hosted model has no such limit, and the whole
+    # reason to reach for one is a conversation too long to reason about in pieces.
+    "llm_num_ctx": 8192,
+    "cloud_num_ctx": 131072,
     # Name of the env var holding the key. The key itself is never stored here.
     "openai_api_key_env": "OPENAI_API_KEY",
 
@@ -161,6 +166,8 @@ class Config:
     openai_model: str
     cloud_tier_scope: str
     cloud_model: str
+    llm_num_ctx: int
+    cloud_num_ctx: int
     openai_api_key_env: str
     embed_model: str
     diarize_model: str
