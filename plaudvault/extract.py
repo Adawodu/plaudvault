@@ -21,7 +21,7 @@ from . import select as select_mod
 from .config import Config
 from .llm import available
 from .store import Store
-from .summarize import _chunk, _generate, summary_path
+from .summarize import _chunk, map_prompts, summary_path
 from .transcribe import read_transcript
 
 # Two prompts rather than one prompt plus a filter. Asking for suggestions and then
@@ -245,8 +245,11 @@ def extract_from_text(cfg: Config, text: str, *, suggestions: bool | None = None
     prompt = build_prompt(suggestions=suggestions)
     found: list[dict] = []
     dropped = skipped_kind = 0
-    for chunk in _chunk(text):
-        raw = _generate(cfg, prompt.format(chunk=chunk), tier=tier)
+    chunks = _chunk(text)
+    replies = map_prompts(cfg, [prompt.format(chunk=c) for c in chunks], tier=tier)
+    for chunk, raw in zip(chunks, replies, strict=True):
+        if raw is None:
+            continue
         chunk_norm = _norm(chunk)
         for item in _parse_json_array(raw):
             if not _grounded(str(item.get("quote") or ""), chunk_norm):

@@ -95,6 +95,21 @@ DEFAULTS: dict = {
     # model falls into a repetition loop and emits until the timeout. Unbounded, that
     # is fifteen minutes per call; bounded, it fails in seconds and the run moves on.
     "llm_max_tokens": 4096,
+    # How many model calls a stage may have in flight at once.
+    #
+    # **1 on purpose, and measured.** Overlapping calls looked like the obvious win and
+    # is not one here: local generation is memory-bandwidth bound, not latency bound.
+    # One stream of an 8B at Q4 reads 5.2 GB of weights about thirty times a second,
+    # which is 156 GB/s of an M4 Pro's 273 GB/s — a second stream has nowhere to run.
+    # Measured on a real five-chunk transcript with the model already warm: 65.8s
+    # serial, 66.9s with two workers. An early 4.4x reading was the first call paying
+    # for model load, not concurrency.
+    #
+    # Raise it where the wait is not bandwidth: a hosted `cloud_model`, where each call
+    # is network latency against a provider running its own parallelism, or a machine
+    # with enough bandwidth to feed two streams (an M4 Max is ~410 GB/s, an Ultra
+    # ~819). OLLAMA_NUM_PARALLEL has to allow it too, and each slot costs a KV cache.
+    "llm_workers": 1,
     "cloud_num_ctx": 131072,
     # Name of the env var holding the key. The key itself is never stored here.
     "openai_api_key_env": "OPENAI_API_KEY",
@@ -179,6 +194,7 @@ class Config:
     cloud_model: str
     llm_num_ctx: int
     llm_max_tokens: int
+    llm_workers: int
     cloud_num_ctx: int
     openai_api_key_env: str
     embed_model: str

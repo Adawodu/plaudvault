@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .config import Config
-from .llm import available, generate
+from .llm import RemoteNotPermitted, available, generate
 from .store import Store
 from .transcribe import read_transcript
 
@@ -86,15 +87,71 @@ def _generate(cfg: Config, prompt: str, *, timeout: float = 900,
     return generate(cfg, prompt, timeout=timeout, tier=tier)
 
 
+def map_prompts(cfg: Config, prompts: list[str], *, tier: str | None = None,
+                timeout: float = 900, workers: int | None = None) -> list[str | None]:
+    """Run prompts concurrently and return the replies **in order**.
+
+    Every stage here walks a transcript in chunks and calls the model once per chunk,
+    strictly one at a time. Profiling says that is the whole runtime: prompt processing
+    is nearly free and generation runs at about 30 tokens a second, so a recording of
+    five chunks spends five serial waits on a machine that can overlap them.
+
+    Threads rather than async: the work is a blocking HTTP call to a local daemon, the
+    GPU time happens on the other side of it, and a thread pool needs no rewrite of the
+    four stages that would use it. The ceiling is Ollama's own `OLLAMA_NUM_PARALLEL` —
+    more workers than it will run concurrently queue up and gain nothing, which is why
+    `llm_workers` defaults low rather than to the core count.
+
+    **Order is preserved and failures are isolated.** A chunk that fails yields None in
+    its place rather than losing the chunks around it or shifting their positions —
+    positions matter, because an action's timestamp is read from the chunk it came from.
+
+    **A tier refusal is not an error and never becomes a None.** `RemoteNotPermitted`
+    means a recording may not be sent to a remote model; swallowing it per chunk would
+    turn a safety refusal into a handful of quietly missing results, and the caller
+    would summarise whatever survived as though the archive had nothing more to say.
+    It propagates.
+    """
+    if not prompts:
+        return []
+    n = max(1, int(workers if workers is not None else getattr(cfg, "llm_workers", 2) or 1))
+    if n == 1 or len(prompts) == 1:
+        return [_generate(cfg, p, timeout=timeout, tier=tier) for p in prompts]
+
+    out: list[str | None] = [None] * len(prompts)
+    refusal: list[BaseException] = []
+    with ThreadPoolExecutor(max_workers=min(n, len(prompts))) as pool:
+        futures = {pool.submit(_generate, cfg, p, timeout=timeout, tier=tier): i
+                   for i, p in enumerate(prompts)}
+        for fut in as_completed(futures):
+            i = futures[fut]
+            try:
+                out[i] = fut.result()
+            except RemoteNotPermitted as exc:
+                refusal.append(exc)
+            except Exception as exc:  # noqa: BLE001
+                # One bad chunk must not cost the rest of the recording — the same
+                # isolation every stage already applies per recording, one level down.
+                print(f"    [chunk {i + 1} failed] {exc}")
+    if refusal:
+        raise refusal[0]
+    return out
+
+
 def summarize_text(cfg: Config, text: str, *, title: str, when: str, minutes: float,
                    tier: str | None = None) -> str:
     chunks = _chunk(text)
     if len(chunks) == 1:
         digests = chunks[0]
     else:
+        # Map concurrently, reduce once. The digests are independent of each other,
+        # which is exactly the property that makes them safe to overlap; the reduce
+        # reads all of them and cannot start until they are done.
+        replies = map_prompts(cfg, [MAP_PROMPT.format(chunk=c) for c in chunks],
+                              tier=tier)
         digests = "\n\n".join(
-            f"--- segment {i} of {len(chunks)} ---\n{_generate(cfg, MAP_PROMPT.format(chunk=c), tier=tier)}"
-            for i, c in enumerate(chunks, 1)
+            f"--- segment {i} of {len(chunks)} ---\n{r}"
+            for i, r in enumerate(replies, 1) if r
         )
     return _generate(
         cfg,

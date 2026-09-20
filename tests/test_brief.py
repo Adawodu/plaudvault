@@ -70,6 +70,7 @@ def test_a_brief_asks_for_timestamps():
 def test_a_generated_brief_is_marked_as_generated(tmp_path, monkeypatch):
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: "## Intent\nBuild the thing.")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: "## Intent\nBuild the thing.")
     md = brief.write_brief(_Cfg(tmp_path), "[00:00:00] we should build it",
                            title="T", when="2026-03-10 09:00")
     assert brief.GENERATED_MARK in md
@@ -94,6 +95,7 @@ def test_the_mark_travels_inside_the_file(tmp_path, monkeypatch):
     copied, mailed, or pasted into an agent's context — which is what briefs are for."""
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: "## Intent\nx")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: "## Intent\nx")
     md = brief.write_brief(_Cfg(tmp_path), "[00:00:00] hi", title="T", when="now")
     assert brief.GENERATED_MARK in md.splitlines(keepends=False)[4:]
 
@@ -109,6 +111,7 @@ def test_force_still_refuses_to_overwrite_a_human(tmp_path, monkeypatch):
     monkeypatch.setattr(brief, "available", lambda cfg: (True, "ok"))
     monkeypatch.setattr(brief, "read_transcript", lambda cfg, rid: "[00:00:00] hello")
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: "## Intent\nrobot text")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: "## Intent\nrobot text")
 
     stats = brief.run(cfg, st, force=True)
     assert stats["kept"] == 1 and stats["written"] == 0
@@ -125,6 +128,7 @@ def test_only_product_conversations_are_briefed(tmp_path, monkeypatch):
     monkeypatch.setattr(brief, "read_transcript", lambda cfg, rid: "[00:00:00] hello")
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: "## Intent\nx")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: "## Intent\nx")
 
     stats = brief.run(cfg, st)
     assert stats["written"] == 1
@@ -146,8 +150,9 @@ def test_an_excluded_recording_is_never_briefed(tmp_path, monkeypatch):
 def test_the_tier_reaches_the_provider_call(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
-    monkeypatch.setattr(brief, "_generate",
-                        lambda cfg, p, *, tier=None, **k: seen.append(tier) or "## Intent\nx")
+    _gen = lambda cfg, p, *, tier=None, **k: seen.append(tier) or "## Intent\nx"  # noqa: E731
+    monkeypatch.setattr(brief, "_generate", _gen)
+    monkeypatch.setattr("plaudvault.summarize._generate", _gen)
     brief.write_brief(_Cfg(tmp_path), "[00:00:00] hi", title="T", when="now", tier="stack")
     assert seen == ["stack"]
 
@@ -155,6 +160,7 @@ def test_the_tier_reaches_the_provider_call(tmp_path, monkeypatch):
 def test_nothing_usable_returns_no_brief_rather_than_an_empty_one(tmp_path, monkeypatch):
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: "   ")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: "   ")
     assert brief.write_brief(_Cfg(tmp_path), "[00:00:00] hi", title="T", when="now") == ""
 
 
@@ -166,6 +172,7 @@ def test_a_personal_conversation_produces_no_brief(tmp_path, monkeypatch):
     because a summary of it genuinely is business analysis."""
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: brief.NOT_A_SPEC)
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: brief.NOT_A_SPEC)
     assert brief.write_brief(_Cfg(tmp_path), "[00:00:00] an argument",
                              title="T", when="now") == ""
 
@@ -177,6 +184,7 @@ def test_a_veto_in_any_part_vetoes_the_whole(tmp_path, monkeypatch):
     replies = iter(["## Intent\nBuild it.", brief.NOT_A_SPEC, "## Intent\nMore."])
     monkeypatch.setattr(brief, "_chunk", lambda t: ["a", "b", "c"])
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: next(replies))
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: next(replies))
     assert brief.write_brief(_Cfg(tmp_path), "x", title="T", when="now") == ""
 
 
@@ -187,6 +195,7 @@ def test_a_declined_brief_is_reported_as_declined_not_failed(tmp_path, monkeypat
     monkeypatch.setattr(brief, "read_transcript", lambda cfg, rid: "[00:00:00] hi")
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: brief.NOT_A_SPEC)
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: brief.NOT_A_SPEC)
     stats = brief.run(cfg, st)
     assert stats["declined"] == 1 and stats["failed"] == 0 and stats["written"] == 0
     assert not brief.brief_path(cfg, "r1").exists()
@@ -209,6 +218,7 @@ def test_a_brief_needs_a_human_confirmed_kind(tmp_path, monkeypatch):
     st = _store(tmp_path / "m.sqlite", source="model")
     monkeypatch.setattr(brief, "available", lambda cfg: (True, "ok"))
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: "## Intent\nx")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: "## Intent\nx")
 
     stats = brief.run(cfg, st)
     assert stats["written"] == 0
@@ -224,6 +234,7 @@ def test_confirming_the_kind_by_hand_unlocks_the_brief(tmp_path, monkeypatch):
     monkeypatch.setattr(brief, "read_transcript", lambda cfg, rid: "[00:00:00] build it")
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: "## Intent\nx")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: "## Intent\nx")
 
     stats = brief.run(cfg, st)
     assert stats["written"] == 1 and stats["awaiting_confirmation"] == 0
@@ -235,4 +246,5 @@ def test_force_does_not_bypass_the_acceptance_gate(tmp_path, monkeypatch):
     st = _store(tmp_path / "m.sqlite", source="model")
     monkeypatch.setattr(brief, "available", lambda cfg: (True, "ok"))
     monkeypatch.setattr(brief, "_generate", lambda *a, **k: "## Intent\nx")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: "## Intent\nx")
     assert brief.run(cfg, st, force=True)["written"] == 0

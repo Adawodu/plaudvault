@@ -22,12 +22,38 @@ import time
 from .config import Config
 from .llm import available
 from .store import Store
-from .summarize import _chunk, _generate
+from .summarize import _chunk, _generate, map_prompts
 from .transcribe import read_transcript
 
 # Below this there is not enough speech for a tone reading to mean anything. Such
 # recordings are marked as looked-at and left unscored rather than given a number.
 MIN_CHARS = 400
+
+# How many stretches of a recording get read for tone. A five-hour pin produces forty
+# chunks, and scoring every one of them spent forty model calls to move one number —
+# the single largest block of calls in a full pass, for the least detailed output in
+# the archive. A sample answers the same question: the reading is a weighted mean, and
+# eight stretches spread across a conversation estimate that mean closely enough to
+# plot, which is all it is ever used for.
+#
+# Sampled evenly with the ends always included, because a conversation's opening and
+# its close carry most of what a tone reading is asked about — how it started, how it
+# ended, and whether those differ.
+MAX_SEGMENTS = 8
+
+
+def _sample(chunks: list[str], limit: int = MAX_SEGMENTS) -> list[tuple[int, str]]:
+    """Up to `limit` chunks, evenly spaced, ends first — with their original positions.
+
+    The index travels with the chunk so `segments_json` still records where in the
+    recording each reading came from. A sampled reading that could not say where it
+    looked would be a number with no way to check it.
+    """
+    if len(chunks) <= limit:
+        return list(enumerate(chunks, 1))
+    step = (len(chunks) - 1) / (limit - 1)
+    picked = sorted({round(i * step) for i in range(limit)})
+    return [(i + 1, chunks[i]) for i in picked]
 
 # |valence| inside this band is "no strong feeling either way" — not mild positivity.
 # Deliberately wide: a narrow band turns ASR noise into a mood.
@@ -102,6 +128,30 @@ def _clamp(value, lo: float, hi: float, default: float | None = None) -> float |
         return default
 
 
+def _read_segment(raw: str, n: int, chunk: str) -> dict | None:
+    """Turn one reply into a segment reading. Pure — no call, so it is testable."""
+    data = _parse_object(raw)
+    if not data:
+        return None
+    valence = _clamp(data.get("valence"), -1, 1)
+    if valence is None:
+        # No usable number means no reading. Defaulting it to 0 would quietly file
+        # a parse failure as "this conversation was neutral", which is a lie.
+        return None
+    label = str(data.get("label") or "").strip().lower()
+    drivers = [str(d).strip()[:80] for d in (data.get("drivers") or []) if str(d).strip()]
+    return {
+        "n": n,
+        "valence": round(valence, 3),
+        "energy": round(_clamp(data.get("energy"), 0, 1, 0.5), 3),
+        "label": label if label in LABELS else "neutral",
+        # An unparseable confidence is treated as low, never as high.
+        "confidence": round(_clamp(data.get("confidence"), 0, 1, 0.3), 3),
+        "drivers": drivers[:3],
+        "chars": len(chunk),
+    }
+
+
 def _score_segment(cfg: Config, chunk: str, n: int, tier: str | None) -> dict | None:
     # The tier travels with every segment, not just with the recording: `_generate`
     # refuses to send a transcript to a remote provider unless that tier is in scope,
@@ -168,11 +218,19 @@ def _aggregate(segments: list[dict]) -> dict:
 
 
 def score_text(cfg: Config, text: str, *, tier: str | None = None) -> dict | None:
-    """One reading for a whole transcript, or None if nothing could be scored."""
+    """One reading for a whole transcript, or None if nothing could be scored.
+
+    Reads a sample of the recording rather than all of it, concurrently. See
+    MAX_SEGMENTS: the output is a weighted mean and a spread, and both survive
+    sampling; forty calls to place one point on a chart did not.
+    """
+    picked = _sample(_chunk(text))
+    if not picked:
+        return None
+    replies = map_prompts(cfg, [PROMPT.format(chunk=c) for _, c in picked], tier=tier)
     segments = [
-        seg
-        for i, chunk in enumerate(_chunk(text), 1)
-        if (seg := _score_segment(cfg, chunk, i, tier)) is not None
+        seg for (i, chunk), raw in zip(picked, replies, strict=True)
+        if raw is not None and (seg := _read_segment(raw, i, chunk)) is not None
     ]
     return _aggregate(segments) if segments else None
 

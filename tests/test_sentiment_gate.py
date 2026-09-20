@@ -24,7 +24,7 @@ def test_the_tier_reaches_the_provider_call(monkeypatch):
         seen.append(tier)
         return '{"valence": 0.4, "energy": 0.5, "label": "positive", "confidence": 0.8}'
 
-    monkeypatch.setattr(sentiment, "_generate", fake_generate)
+    monkeypatch.setattr("plaudvault.summarize._generate", fake_generate)
     result = sentiment.score_text(object(), SAMPLE, tier="local")
     assert result is not None
     assert seen and set(seen) == {"local"}
@@ -32,7 +32,7 @@ def test_the_tier_reaches_the_provider_call(monkeypatch):
 
 def test_an_untriaged_recording_is_scored_with_no_tier_not_a_guess(monkeypatch):
     seen = []
-    monkeypatch.setattr(sentiment, "_generate", lambda cfg, p, *, tier=None, **kw: (
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda cfg, p, *, tier=None, **kw: (
         seen.append(tier) or '{"valence": 0, "label": "neutral", "confidence": 0.5}'))
     sentiment.score_text(object(), SAMPLE, tier=None)
     assert seen == [None] * len(seen)
@@ -43,7 +43,7 @@ def test_a_refusal_from_the_gate_propagates_rather_than_scoring_anyway(monkeypat
     def refuse(cfg, prompt, *, tier=None, **kw):
         raise RemoteNotPermitted("tier not in cloud scope")
 
-    monkeypatch.setattr(sentiment, "_generate", refuse)
+    monkeypatch.setattr("plaudvault.summarize._generate", refuse)
     with pytest.raises(RemoteNotPermitted):
         sentiment.score_text(object(), SAMPLE, tier="private")
 
@@ -51,5 +51,5 @@ def test_a_refusal_from_the_gate_propagates_rather_than_scoring_anyway(monkeypat
 def test_an_unparseable_reading_is_no_reading_not_a_neutral_one(monkeypatch):
     """Filing a parse failure as 'this conversation was neutral' is a lie that then
     shows up on the tone trend as data."""
-    monkeypatch.setattr(sentiment, "_generate", lambda cfg, p, *, tier=None, **kw: "not json")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda cfg, p, *, tier=None, **kw: "not json")
     assert sentiment.score_text(object(), SAMPLE, tier="local") is None

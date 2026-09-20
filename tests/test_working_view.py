@@ -222,6 +222,7 @@ def test_each_conversation_gets_its_own_brief_file(tmp_path, monkeypatch):
     monkeypatch.setattr(brief, "read_transcript", lambda cfg, rid: TRANSCRIPT)
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
     monkeypatch.setattr(brief, "_generate", lambda cfg, p, **k: f"## Intent\n{p[-40:]}")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda cfg, p, **k: f"## Intent\n{p[-40:]}")
 
     stats = brief.run(cfg, st)
     assert stats["written"] == 2
@@ -238,8 +239,9 @@ def test_a_brief_is_written_from_its_own_conversation(tmp_path, monkeypatch):
     monkeypatch.setattr(brief, "available", lambda cfg: (True, "ok"))
     monkeypatch.setattr(brief, "read_transcript", lambda cfg, rid: TRANSCRIPT)
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
-    monkeypatch.setattr(brief, "_generate",
-                        lambda cfg, p, **k: seen.append(p) or "## Intent\nx")
+    _gen = lambda cfg, p, **k: seen.append(p) or "## Intent\nx"  # noqa: E731
+    monkeypatch.setattr(brief, "_generate", _gen)
+    monkeypatch.setattr("plaudvault.summarize._generate", _gen)
     brief.run(cfg, st)
     assert seen and "second conversation" in seen[0]
     assert "first conversation" not in seen[0]
@@ -254,6 +256,7 @@ def test_only_the_confirmed_conversation_is_briefed(tmp_path, monkeypatch):
     monkeypatch.setattr(brief, "read_transcript", lambda cfg, rid: TRANSCRIPT)
     monkeypatch.setattr(brief, "_chunk", lambda t: [t])
     monkeypatch.setattr(brief, "_generate", lambda cfg, p, **k: "## Intent\nx")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda cfg, p, **k: "## Intent\nx")
 
     stats = brief.run(cfg, st)
     assert stats["written"] == 1 and stats["awaiting_confirmation"] == 1

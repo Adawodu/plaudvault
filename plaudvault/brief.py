@@ -62,7 +62,7 @@ from . import segment as segment_mod
 from .config import Config
 from .llm import available
 from .store import Store
-from .summarize import _chunk, _generate
+from .summarize import _chunk, _generate, map_prompts
 from .transcribe import read_transcript
 
 # The marker a re-run looks for. Written into the file rather than tracked in the
@@ -153,7 +153,7 @@ def was_edited(path: Path) -> bool:
 def write_brief(cfg: Config, text: str, *, title: str, when: str,
                 tier: str | None = None) -> str:
     """Build the brief for one transcript. One call per chunk, then a merge."""
-    raw = [_generate(cfg, PROMPT.format(chunk=c), tier=tier) for c in _chunk(text)]
+    raw = map_prompts(cfg, [PROMPT.format(chunk=c) for c in _chunk(text)], tier=tier)
     parts = [p.strip() for p in raw if p and p.strip()]
     # A veto anywhere is a veto. One part of a conversation reading as a specification
     # does not make the conversation one, and the asymmetry is deliberate: writing no

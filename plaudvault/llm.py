@@ -206,8 +206,12 @@ def with_cloud(cfg: Config) -> Config:
             '    cloud_tier_scope = "stack"'
         )
     ctx = cfg.cloud_num_ctx or cfg.llm_num_ctx
+    # Concurrency earns its keep here and not locally. A local call waits on memory
+    # bandwidth, which a second call cannot help with; a hosted call waits on the
+    # network and on a provider running its own parallelism, which it can.
+    workers = max(int(getattr(cfg, "llm_workers", 1) or 1), 4)
     if model_is_cloud(cfg.cloud_model):
         return replace(cfg, llm_provider="ollama", ollama_model=cfg.cloud_model,
-                       llm_num_ctx=ctx)
+                       llm_num_ctx=ctx, llm_workers=workers)
     return replace(cfg, llm_provider="openai", openai_model=cfg.cloud_model,
-                   llm_num_ctx=ctx)
+                   llm_num_ctx=ctx, llm_workers=workers)

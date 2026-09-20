@@ -194,7 +194,9 @@ def test_a_kind_that_expects_nothing_is_never_sent_to_the_model(tmp_path, monkey
     calls = []
     monkeypatch.setattr(extract, "available", lambda cfg: (True, "ok"))
     monkeypatch.setattr(extract, "read_transcript", lambda cfg, rid: "[00:00:00] Amen.\n")
-    monkeypatch.setattr(extract, "_generate",
+    # The shared call site: map_prompts resolves `_generate` through the summarize
+    # module at call time, so this covers the concurrent path as well as the serial one.
+    monkeypatch.setattr("plaudvault.summarize._generate",
                         lambda *a, **k: calls.append(1) or "[]")
 
     stats = extract.run(_Cfg(tmp_path), st)
@@ -217,7 +219,7 @@ def test_an_extractable_kind_still_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(extract, "available", lambda cfg: (True, "ok"))
     monkeypatch.setattr(extract, "read_transcript",
                         lambda cfg, rid: "[00:00:00] I'll send the deck on Friday.\n")
-    monkeypatch.setattr(extract, "_generate", lambda *a, **k: (
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: (
         '[{"text":"Send the deck","kind":"commitment","owner":"Bayo",'
         '"quote":"I\'ll send the deck on Friday","at":"00:00:00"}]'))
 
@@ -238,7 +240,7 @@ def test_an_unclassified_recording_is_extracted_and_counted(tmp_path, monkeypatc
 
     monkeypatch.setattr(extract, "available", lambda cfg: (True, "ok"))
     monkeypatch.setattr(extract, "read_transcript", lambda cfg, rid: "[00:00:00] hello\n")
-    monkeypatch.setattr(extract, "_generate", lambda *a, **k: "[]")
+    monkeypatch.setattr("plaudvault.summarize._generate", lambda *a, **k: "[]")
 
     stats = extract.run(_Cfg(tmp_path), st)
     assert stats["unclassified"] == 1

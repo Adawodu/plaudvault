@@ -274,6 +274,7 @@ def test_selection_can_run_on_a_larger_model_while_extraction_stays_local(tmp_pa
         cloud_tier_scope: str = "stack"
         llm_num_ctx: int = 8192
         cloud_num_ctx: int = 131072
+        llm_workers: int = 1
         summary_dir = None
 
         @property
@@ -311,6 +312,7 @@ def test_asking_for_the_cloud_without_configuring_it_is_an_error_not_a_fallback(
         cloud_model: str = ""
         llm_num_ctx: int = 8192
         cloud_num_ctx: int = 131072
+        llm_workers: int = 1
 
     with pytest.raises(llm.LLMError) as exc:
         llm.with_cloud(Cfg())
@@ -330,6 +332,7 @@ def test_the_context_window_travels_with_the_provider():
         cloud_model: str = "glm-5.3:cloud"
         llm_num_ctx: int = 8192
         cloud_num_ctx: int = 131072
+        llm_workers: int = 1
         llm_provider: str = "ollama"
         ollama_model: str = "qwen3:latest"
         openai_model: str = ""
