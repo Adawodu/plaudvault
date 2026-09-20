@@ -83,7 +83,11 @@ DEFAULTS: dict = {
     # How much the model is allowed to see at once. 8192 is what a local 8B holds on a
     # 24 GB machine without thrashing; a hosted model has no such limit, and the whole
     # reason to reach for one is a conversation too long to reason about in pieces.
-    "llm_num_ctx": 8192,
+    # 8192 was too tight to be safe: an extraction prompt is ~5,600 tokens and the
+    # output ceiling allows 4,096, so the two together overflowed the window and the
+    # model paid for context shifting mid-call. Measured on a real chunk, 16384 ran the
+    # same work in 179s against 273s. The extra KV cache is about a gigabyte for an 8B.
+    "llm_num_ctx": 16384,
     # A ceiling on how much the model may emit in one call. Every legitimate output
     # here — a summary, a JSON array of commitments, a five-section brief — is well
     # under this. Its job is the illegitimate case: fed a transcript that is 7% unique

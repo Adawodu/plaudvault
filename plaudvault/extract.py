@@ -87,6 +87,10 @@ it. Every "quote" must be copied from the transcript below — never from this e
 Plenty of conversations contain nothing actionable — if this is one of them, return an
 empty array [] rather than manufacturing something.
 
+Return AT MOST {max_items} items — the strongest ones. Most passages hold one or two real
+commitments and many hold none, so a short array is the usual answer and an empty one is
+a correct answer.
+
 Return ONLY the JSON array, no prose and no code fences.
 
 TRANSCRIPT:
@@ -96,8 +100,26 @@ OUTPUT:
 """
 
 
-def build_prompt(*, suggestions: bool) -> str:
+# A ceiling on what one chunk may return. It is a performance fix and a precision fix
+# in the same line, which is unusual enough to be worth explaining.
+#
+# Measured on a real 12,000-character chunk: uncapped, the model returned 55 items and
+# spent 2,400 output tokens doing it. Generation runs at ~30 tokens/sec on this machine
+# and prompt processing is nearly free — 5,634 prompt tokens cost under a second — so
+# the entire cost of extraction is the length of what it writes. Asked for at most 8, the
+# same chunk took 34s instead of 138s and returned 8 usable items instead of a truncated
+# array that parsed to nothing.
+#
+# Nothing downstream wanted 55. A conversation's budget is 3, selection sees every
+# candidate at once, and a recording of five chunks still offers 40 for those 3 places.
+# Asking for fewer is not lowering recall; it is declining to pay for candidates that
+# exist only to be discarded.
+MAX_PER_CHUNK = 8
+
+
+def build_prompt(*, suggestions: bool, max_items: int = MAX_PER_CHUNK) -> str:
     return EXTRACT_PROMPT.format(
+        max_items=max_items,
         rules=_RULES_WITH_SUGGESTIONS if suggestions else _RULES_COMMITMENTS_ONLY,
         kind_field=_KIND_FIELD_WITH_SUGGESTIONS if suggestions else _KIND_FIELD_COMMITMENTS_ONLY,
         example=_EXAMPLE_WITH_SUGGESTIONS if suggestions else _EXAMPLE_COMMITMENTS_ONLY,
@@ -117,16 +139,63 @@ def _parse_ts(text: str) -> int | None:
 
 
 def _parse_json_array(raw: str) -> list[dict]:
+    """Read the model's array, recovering what survives a cut-off.
+
+    A reply that ran into the output ceiling ends mid-object, with no closing bracket.
+    Returning [] for that is indistinguishable from "this passage held nothing", which
+    is a real and common answer — so a whole chunk's worth of commitments could vanish
+    and the run would report a normal, quiet zero. It happened: a chunk that genuinely
+    held items hit the ceiling and parsed to nothing.
+
+    So a truncated array is salvaged element by element rather than discarded. The
+    complete objects before the cut are real extractions and are kept; the partial one
+    at the end is dropped.
+    """
     raw = raw.strip()
     raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.M).strip()
-    start, end = raw.find("["), raw.rfind("]")
-    if start < 0 or end < 0:
+    start = raw.find("[")
+    if start < 0:
         return []
-    try:
-        data = json.loads(raw[start : end + 1])
-    except json.JSONDecodeError:
-        return []
-    return [d for d in data if isinstance(d, dict) and (d.get("text") or "").strip()]
+    end = raw.rfind("]")
+    if end > start:
+        try:
+            data = json.loads(raw[start : end + 1])
+            return [d for d in data
+                    if isinstance(d, dict) and (d.get("text") or "").strip()]
+        except json.JSONDecodeError:
+            pass
+    return _salvage_objects(raw[start:])
+
+
+def _salvage_objects(body: str) -> list[dict]:
+    """Every complete {...} in a possibly-truncated array, in order."""
+    out, depth, obj_start, in_str, escaped = [], 0, None, False, False
+    for i, ch in enumerate(body):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and obj_start is not None:
+                try:
+                    d = json.loads(body[obj_start : i + 1])
+                except json.JSONDecodeError:
+                    d = None
+                if isinstance(d, dict) and (d.get("text") or "").strip():
+                    out.append(d)
+                obj_start = None
+    return out
 
 
 # Words too common to prove anything about where a quote came from.
