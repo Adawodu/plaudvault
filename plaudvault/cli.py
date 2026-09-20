@@ -1060,6 +1060,52 @@ def cmd_fresh(args, cfg) -> int:
     return 0 if report["up_to_date"] else 1
 
 
+def cmd_mark(args, cfg) -> int:
+    """Queue recordings for removal from Plaud's cloud, in bulk, from the terminal.
+
+    The console marks a selection; this marks a rule — "everything already eligible",
+    which is the query a person actually has in mind when they have seventy of them.
+    Marking is still only a queue: `prune` re-checks every precondition, still needs a
+    probe, and still needs `--yes`.
+    """
+    with _client(cfg) as client, Store(cfg.db_path) as store:
+        del client
+        rows = store.all()
+        if args.eligible:
+            targets = [r for r in rows if prune._eligible(cfg, r)[0]]
+        elif args.recording:
+            targets = [r for r in rows if r["id"] in set(args.recording.split(","))]
+        else:
+            print("  say which: --eligible, or --recording <id[,id...]>")
+            return 2
+        if not targets:
+            print("  nothing matched")
+            return 0
+
+        marked = not args.unmark
+        if marked and not args.yes:
+            print(f"\n  would mark {len(targets)} recordings for cloud deletion:\n")
+            for r in targets[:10]:
+                when = time.strftime("%Y-%m-%d", time.localtime(r["started_at"]))
+                print(f"    {when}  {round((r['duration_s'] or 0) / 60):>4}min  "
+                      f"{(r['title'] or r['filename'])[:46]}")
+            if len(targets) > 10:
+                print(f"    ... and {len(targets) - 10} more")
+            print("\n  nothing was marked — add --yes. Marking sends nothing to Plaud;")
+            print("  `plaudctl prune` is still what reaches their servers, and it still")
+            print("  needs a probe and its own --yes.")
+            return 0
+
+        for r in targets:
+            t = store.triage_of(r["id"])
+            store.set_triage(r["id"], (t["tier"] if t else None) or "local",
+                             marked_for_prune=marked, note=(t["note"] if t else "") or "")
+        print(f"  {'marked' if marked else 'unmarked'} {len(targets)} recordings")
+        if marked:
+            print("  next:  plaudctl prune --probe --yes   then   plaudctl prune --yes")
+    return 0
+
+
 def cmd_prune(args, cfg) -> int:
     with _client(cfg) as client, Store(cfg.db_path) as store:
         if args.probe:
@@ -1260,6 +1306,13 @@ def main(argv=None) -> int:
     sp = add("run", cmd_run,
              "sync -> transcribe -> diarize -> summarize -> title -> sentiment -> notes -> extract -> index -> tier")
     sp.add_argument("--limit", type=int)
+
+    sp = add("mark", cmd_mark, "queue recordings for deletion from Plaud's cloud")
+    sp.add_argument("--eligible", action="store_true",
+                    help="every recording that already passes prune's checks")
+    sp.add_argument("--recording", metavar="ID[,ID...]", help="these specific ones")
+    sp.add_argument("--unmark", action="store_true", help="take them back out of the queue")
+    sp.add_argument("--yes", action="store_true", help="actually mark (default is a dry run)")
 
     sp = add("prune", cmd_prune, "move locally-archived recordings to Plaud's trash")
     sp.add_argument("--probe", action="store_true", help="verify the endpoint on ONE recording")

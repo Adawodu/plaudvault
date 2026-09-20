@@ -886,7 +886,10 @@ function renderBulk(){
        <button class="btn sm danger" onclick="bulkActions('dropped')">reject</button>`
     : `<button class="btn sm danger" onclick="bulkRecordings('exclude')">dismiss</button>
        <button class="btn sm" onclick="bulkRecordings('local')">local only</button>
-       <button class="btn sm primary" onclick="bulkRecordings('stack')">into stack</button>`;
+       <button class="btn sm primary" onclick="bulkRecordings('stack')">into stack</button>
+       <span class="faint" style="margin:0 4px">|</span>
+       <button class="btn sm" title="Queue these for removal from Plaud's cloud. Nothing is sent until you run plaudctl prune." onclick="bulkMarkDeletion(true)">mark for cloud deletion</button>
+       <button class="btn sm" title="Take these back out of the deletion queue" onclick="bulkMarkDeletion(false)">unmark</button>`;
 }
 
 function selBox(id, kind){
@@ -913,6 +916,26 @@ async function bulkActions(status){
   await loadActions();
   loadFreshness();
   toast(`${verb}: ${r.updated} action${r.updated===1?'':'s'}`);
+}
+
+// Marking is a queue, not a deletion — which is why it is allowed to be a bulk
+// action at all. `plaudctl prune` re-checks every precondition at prune time, refuses
+// to run until a probe has proved the endpoint on one recording, and needs --yes.
+// The confirmation says what marking does and, as importantly, what it does not.
+async function bulkMarkDeletion(marked){
+  const ids = [...SEL];
+  if (marked && !confirm(
+      `Queue ${ids.length} recording${ids.length===1?'':'s'} for deletion from Plaud's cloud?\n\n`
+    + `Nothing is sent now. This only marks them. Your local audio and transcripts are `
+    + `never touched by pruning — they are the copy you are keeping.\n\n`
+    + `When you are ready, run:  plaudctl prune --probe --yes  then  plaudctl prune --yes`)) return;
+  const r = await jpost('/api/recordings/bulk/mark-for-deletion', {ids, marked});
+  clearSel();
+  await refresh();
+  loadFreshness();
+  toast(marked
+    ? `${r.updated} marked — ${r.eligible_now} eligible today`
+    : `${r.updated} unmarked`);
 }
 
 async function bulkRecordings(tier){

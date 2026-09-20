@@ -28,6 +28,7 @@ from . import (
     kinds,
     llm,
     metrics,
+    prune,
     runlock,
     search,
     story,
@@ -298,6 +299,52 @@ def recordings_bulk(body: dict = Body(...)):
         report = tiering.sync(cfg, store)
     return {"ok": True, "updated": done, "missing": missing, "tier": tier,
             "stack_sync": report}
+
+
+@app.post("/api/recordings/bulk/mark-for-deletion")
+def bulk_mark_for_deletion(body: dict = Body(...)):
+    """Queue many recordings for removal from Plaud's cloud, or take them out of the queue.
+
+    Kept apart from `/bulk` deliberately. That endpoint sets a tier and clears this
+    flag, because deciding what a recording *is* and deciding to stop paying a company
+    to store it are different judgements — and one of them is about somebody else's
+    servers. A caller must say which it is doing.
+
+    **Marking is a queue, not a deletion.** `prune` re-checks every precondition at
+    prune time — hash, transcript, note, age — refuses to run at all until a probe has
+    proved the endpoint on a single recording, and needs `--yes`. So this is allowed to
+    be a bulk action: nothing here reaches Plaud, and the recordings that are not
+    eligible are simply skipped later.
+
+    The response says how many of the marked recordings actually qualify today, because
+    marking sixty and pruning four with no explanation is how a person stops trusting
+    the number.
+    """
+    cfg = _cfg()
+    ids = [str(i) for i in (body.get("ids") or [])]
+    marked = bool(body.get("marked", True))
+    if not ids:
+        raise HTTPException(400, "no recordings selected")
+    if len(ids) > 500:
+        raise HTTPException(400, "refusing to bulk-edit more than 500 at once")
+
+    updated, missing, eligible = 0, [], 0
+    with _store(cfg) as store:
+        for rec_id in ids:
+            row = store.get(rec_id)
+            if row is None:
+                missing.append(rec_id)
+                continue
+            t = store.triage_of(rec_id)
+            # The tier is preserved: this says nothing about what the recording is.
+            store.set_triage(rec_id, (t["tier"] if t else None) or "local",
+                             marked_for_prune=marked,
+                             note=(t["note"] if t else "") or "")
+            updated += 1
+            if marked and prune._eligible(cfg, row)[0]:
+                eligible += 1
+    return {"ok": True, "updated": updated, "marked": marked,
+            "eligible_now": eligible, "missing": missing}
 
 
 @app.patch("/api/recordings/{rec_id}/title")

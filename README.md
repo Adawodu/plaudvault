@@ -1013,6 +1013,43 @@ Ollama's servers. An address check therefore reported *"nothing leaves this mach
 while it did, and the tier gate never engaged. A `-cloud` suffix now makes a model remote
 regardless of the address it is dialled at.
 
+## Clearing recordings out of Plaud's cloud
+
+Deletion is never automatic and never a side effect. It is two decisions, made
+separately: *mark* the recordings you no longer want stored on their servers, then *run*
+the thing that talks to them.
+
+**Marking**, in the console — select recordings, then **mark for cloud deletion** in the
+selection bar. Or from the terminal, for the case where you mean "all of them":
+
+```bash
+plaudctl mark --eligible          # dry run: shows what would be queued
+plaudctl mark --eligible --yes
+plaudctl mark --eligible --unmark # changed your mind
+```
+
+Marking changes nothing on Plaud and nothing about what a recording *is* — a `stack`
+recording stays `stack`. It only says you are done paying someone else to keep the audio.
+
+**Pruning**, which is the part that leaves your machine:
+
+```bash
+plaudctl prune --probe --yes      # trashes exactly ONE and verifies it landed
+plaudctl prune                    # dry run over the rest
+plaudctl prune --yes
+```
+
+The probe is mandatory the first time. Plaud's trash endpoint is **inferred, not
+documented**, so bulk pruning stays locked until one recording has proved the endpoint
+behaves and a receipt says so. Delete the receipt and you are back to probe-only.
+
+Every precondition is re-checked at prune time, not trusted from when you marked it: the
+local audio must still hash to what was recorded at download, still have a transcript and
+a vault note, and be older than `prune_min_age_days`. And it uses **trash**, not hard
+delete — recoverable from the Plaud app for a window.
+
+Your local archive is never touched by any of this. It is the copy you are keeping.
+
 ## Developing
 
 ```bash
