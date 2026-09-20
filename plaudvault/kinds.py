@@ -138,9 +138,18 @@ def body_for(cfg: Config, store: Store, conv: dict) -> str:
     """
     if not conv["segmented"]:
         sp = summary_path(cfg, conv["recording_id"])
-        return sp.read_text() if sp.exists() else ""
+        if sp.exists():
+            return sp.read_text()
+        # No summary is not the same as nothing to read. A recording under
+        # `summarize_min_seconds` never gets one, and falling through to "" left ten
+        # short recordings permanently unclassifiable: queued by `needing_kind` on
+        # every run, skipped on every run, and reported as outstanding work forever.
+        # They are short by definition, so the transcript is the better evidence
+        # anyway — it is most of what a summary of them would have said.
     text = segment_mod.transcript_for(
         read_transcript(cfg, conv["recording_id"]), conv["start_ms"], conv["end_ms"])
+    if not conv["segmented"]:
+        text = read_transcript(cfg, conv["recording_id"])
     if len(text) <= HEAD_CHARS + TAIL_CHARS:
         return text
     return f"{text[:HEAD_CHARS]}\n\n[... middle of the conversation omitted ...]\n\n{text[-TAIL_CHARS:]}"

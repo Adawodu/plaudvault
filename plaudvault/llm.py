@@ -149,8 +149,13 @@ def generate(cfg: Config, prompt: str, *, temperature: float = 0.2, timeout: flo
                 # A hosted model is reached for precisely when 8192 is the
                 # constraint, so the window travels with the provider rather than
                 # being fixed at what this machine can hold.
-                "options": {"temperature": temperature,
-                            "num_ctx": int(getattr(cfg, "llm_num_ctx", 8192) or 8192)},
+                "options": {
+                    "temperature": temperature,
+                    "num_ctx": int(getattr(cfg, "llm_num_ctx", 8192) or 8192),
+                    # Bounded so a repetition loop fails fast instead of holding the
+                    # call open until the timeout. See config's llm_max_tokens.
+                    "num_predict": int(getattr(cfg, "llm_max_tokens", 4096) or 4096),
+                },
             },
             timeout=timeout,
         )
@@ -165,6 +170,7 @@ def generate(cfg: Config, prompt: str, *, temperature: float = 0.2, timeout: flo
                 "model": cfg.openai_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": temperature,
+                "max_tokens": int(getattr(cfg, "llm_max_tokens", 4096) or 4096),
             },
             timeout=timeout,
         )

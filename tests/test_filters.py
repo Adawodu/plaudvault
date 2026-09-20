@@ -200,3 +200,37 @@ def test_indexing_refuses_a_hosted_embedding_model():
     assert ok is False and "every sentence" in why
     with pytest.raises(search.EmbedError):
         search.embed(_Cfg2(), ["text"])
+
+
+def test_generation_is_bounded_so_a_repetition_loop_fails_fast():
+    """A transcript that is 7% unique words — "thank you" 512 times, from a pin left
+    running through a meditation — sends a small model into a repetition loop. Held
+    open it burns the full 900s timeout per call; four of those killed a pipeline
+    stage. The ceiling turns it into a fast failure."""
+    import httpx
+
+    sent = {}
+
+    class _Resp:
+        is_success = True
+        text = ""
+
+        def json(self):
+            return {"response": "ok"}
+
+    def fake_post(url, json=None, **kw):
+        sent.update(json or {})
+        return _Resp()
+
+    class Cfg(_Ollama):
+        llm_num_ctx = 8192
+        llm_max_tokens = 4096
+
+    real = httpx.post
+    httpx.post = fake_post
+    try:
+        llm.generate(Cfg(), "hello")
+    finally:
+        httpx.post = real
+    assert sent["options"]["num_predict"] == 4096
+    assert sent["options"]["num_ctx"] == 8192

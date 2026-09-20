@@ -84,6 +84,13 @@ DEFAULTS: dict = {
     # 24 GB machine without thrashing; a hosted model has no such limit, and the whole
     # reason to reach for one is a conversation too long to reason about in pieces.
     "llm_num_ctx": 8192,
+    # A ceiling on how much the model may emit in one call. Every legitimate output
+    # here — a summary, a JSON array of commitments, a five-section brief — is well
+    # under this. Its job is the illegitimate case: fed a transcript that is 7% unique
+    # words ("thank you" 512 times, from a pin left running in a meditation), a small
+    # model falls into a repetition loop and emits until the timeout. Unbounded, that
+    # is fifteen minutes per call; bounded, it fails in seconds and the run moves on.
+    "llm_max_tokens": 4096,
     "cloud_num_ctx": 131072,
     # Name of the env var holding the key. The key itself is never stored here.
     "openai_api_key_env": "OPENAI_API_KEY",
@@ -167,6 +174,7 @@ class Config:
     cloud_tier_scope: str
     cloud_model: str
     llm_num_ctx: int
+    llm_max_tokens: int
     cloud_num_ctx: int
     openai_api_key_env: str
     embed_model: str
