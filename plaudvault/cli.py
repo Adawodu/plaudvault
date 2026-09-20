@@ -1075,6 +1075,11 @@ def main(argv=None) -> int:
 
     def add(name, fn, help_):
         sp = sub.add_parser(name, help=help_)
+        # Every subcommand carries a default for every flag any subcommand defines,
+        # because `run` invokes the stage functions directly with its own namespace.
+        # A flag added to one subcommand and not added here is an AttributeError that
+        # only fires inside `plaudctl run` — see test_cli_run_stages.py, which fails
+        # rather than letting the next one reach a four-hour pipeline.
         sp.set_defaults(fn=fn, limit=None, force=False, yes=False, probe=False, cloud=False,
                         suggestions=False, excluded=False, query='',
                         recording=None, format='svg', out=None,
@@ -1083,7 +1088,10 @@ def main(argv=None) -> int:
                         label=None, speaker=None, clear=False, threshold=None,
                         agent=None, status=None, instructions=None, id=None,
                         tiers=None, all=False, per_recording=2,
-                        unverified=False, kinds=None)
+                        unverified=False, kinds=None,
+                        # the working view
+                        set=None, list=False, show=None, segment=0, confirm=None,
+                        context=0, recordings=5, seed=0, measure=False, max_items=60)
         return sp
 
     sp = add("login", cmd_login, "authenticate with Plaud (emailed one-time code)")
