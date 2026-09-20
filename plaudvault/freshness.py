@@ -108,10 +108,16 @@ def _pending(store: Store, cfg: Config) -> list[dict]:
             # rather than the corpus — a zero here means every spec has a brief, not
             # that nothing was briefed.
             "stage": "brief",
+            # Only conversations a person has confirmed as `product`, because that is
+            # the gate `brief` itself applies. Counting proposals reported ten
+            # recordings of work that every run then declined to do, which reads as a
+            # stuck pipeline rather than as a queue waiting on a human.
             "count": sum(
                 1 for c in store.by_kind("product")
-                if not (cfg.brief_dir
-                        / f"{c['recording_id']}.s{c['segment_idx']}.md").exists()
+                if (k := store.kind_of(c["recording_id"], c["segment_idx"])) is not None
+                and k["source"] == "human"
+                and not (cfg.brief_dir
+                         / f"{c['recording_id']}.s{c['segment_idx']}.md").exists()
             ),
             "label": "briefed (product conversations)",
             "fix": "plaudctl brief",
@@ -121,13 +127,13 @@ def _pending(store: Store, cfg: Config) -> list[dict]:
             # in one vector space and half in another, which reads as a silently
             # incomplete search rather than an error.
             "stage": "index",
-            "count": store.db.execute(
-                f"SELECT COUNT(*) FROM recordings r WHERE r.transcript_path IS NOT NULL "
-                f"AND {store.NOT_EXCLUDED} "
-                "AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.recording_id = r.id "
-                "AND c.model = ?)",
-                (cfg.embed_model,),
-            ).fetchone()[0],
+            # Delegated, not re-implemented. This was a second copy of the same
+            # query, and the two drifted: `index` learned to stop re-reading
+            # recordings whose transcripts chunk to nothing, and `fresh` kept
+            # reporting them as four recordings of outstanding work forever. What a
+            # stage will do and what freshness says it will do have to be one
+            # sentence in one place.
+            "count": len(store.needing_index(cfg.embed_model)),
             "label": "indexed for search",
             "fix": "plaudctl index",
         },

@@ -7,6 +7,7 @@ therapy session to somebody's API.
 
 from __future__ import annotations
 
+import pathlib
 import time
 
 import numpy as np
@@ -234,3 +235,52 @@ def test_generation_is_bounded_so_a_repetition_loop_fails_fast():
         httpx.post = real
     assert sent["options"]["num_predict"] == 4096
     assert sent["options"]["num_ctx"] == 8192
+
+
+# ------------------------------------- work a run can never complete is not work
+
+def test_a_transcript_that_chunks_to_nothing_is_not_queued_forever(tmp_path):
+    """Four recordings here hold transcripts of 18 to 51 characters — a few seconds of
+    audio — which chunk to nothing under any model. Keyed only on "has no chunks", the
+    indexer re-read them on every run and `fresh` reported four recordings of
+    outstanding work that no run could ever finish. Same distinction sentiment draws
+    between "not scored yet" and "looked at, and declined"."""
+    st = Store(tmp_path / "m.sqlite")
+    st.db.execute("INSERT INTO recordings (id, filename, started_at, duration_s,"
+                  " transcript_path) VALUES (?,?,?,?,?)",
+                  ("tiny", "tiny.mp3", T0, 4.0, "/tmp/tiny.txt"))
+    st.db.commit()
+    assert [r["id"] for r in st.needing_index("m")] == ["tiny"]
+
+    st.update("tiny", indexed_at=T0)          # looked at; produced nothing
+    assert st.needing_index("m") == []
+
+
+def test_a_recording_indexed_under_another_model_is_still_queued(tmp_path):
+    """Which is the whole point of keying on the model: switching embedders must
+    re-index rather than leave the corpus half in one vector space."""
+    st = Store(tmp_path / "m.sqlite")
+    st.db.execute("INSERT INTO recordings (id, filename, started_at, duration_s,"
+                  " transcript_path) VALUES (?,?,?,?,?)",
+                  ("r1", "r1.mp3", T0, 600.0, "/tmp/r1.txt"))
+    st.db.commit()
+    st.set_chunks("r1", [{"start_ms": 0, "text": "hello there"}],
+                  np.zeros((1, 8), dtype="float32"), model="old-model")
+    st.update("r1", indexed_at=T0)
+    assert [r["id"] for r in st.needing_index("new-model")] == ["r1"]
+
+
+def test_freshness_reports_what_the_stage_will_actually_do(tmp_path):
+    """Freshness held a second copy of this query and the two drifted. What a stage
+    will do and what freshness says it will do have to be one sentence in one place."""
+    from plaudvault import freshness
+
+    st = Store(tmp_path / "m.sqlite")
+    st.db.execute("INSERT INTO recordings (id, filename, started_at, duration_s,"
+                  " transcript_path) VALUES (?,?,?,?,?)",
+                  ("tiny", "tiny.mp3", T0, 4.0, "/tmp/tiny.txt"))
+    st.db.commit()
+    st.update("tiny", indexed_at=T0)
+
+    src = pathlib.Path(freshness.__file__).read_text()
+    assert "store.needing_index(" in src, "freshness must delegate, not re-implement"

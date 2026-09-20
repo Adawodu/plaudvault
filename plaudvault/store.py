@@ -892,12 +892,25 @@ class Store:
 
         Keyed on the model, so switching embedding models re-indexes rather than
         leaving a corpus half in one vector space and half in another.
+
+        A recording the indexer has *looked at* and that produced no chunks at all is
+        excluded, the same distinction sentiment draws between "not scored yet" and
+        "scored, and declined". Four recordings here hold transcripts of 18 to 51
+        characters — a few seconds of audio — which chunk to nothing under any model.
+        Without this they are queued on every run forever and `fresh` reports four
+        recordings of outstanding work that no run can ever complete.
+
+        A recording with chunks under a *different* model is still queued, which is the
+        point of keying on the model.
         """
         return self.db.execute(
             f"SELECT r.* FROM recordings r WHERE r.transcript_path IS NOT NULL "
             f"AND {self.NOT_EXCLUDED} "
             "AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.recording_id = r.id "
-            "AND c.model = ?) ORDER BY r.started_at DESC",
+            "AND c.model = ?) "
+            "AND NOT (r.indexed_at IS NOT NULL "
+            "         AND NOT EXISTS (SELECT 1 FROM chunks c2 WHERE c2.recording_id = r.id)) "
+            "ORDER BY r.started_at DESC",
             (model,),
         ).fetchall()
 
