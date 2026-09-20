@@ -927,6 +927,46 @@ killed run can't wedge the pipeline.
   every command fails fast rather than writing a phantom archive to the boot disk that
   would be shadowed on remount.
 
+## Making a run faster
+
+Profiled rather than guessed. On an M4 Pro, prompt processing is nearly free — 5,634
+prompt tokens cost under a second — and generation runs at about 30 tokens a second.
+**The whole cost of a call is the length of what the model writes.**
+
+Which makes the biggest win a prompt change, not hardware. Extraction was asked for an
+unlimited list and returned 55 candidates from one chunk, for a conversation whose budget
+is 3:
+
+| one 12,000-character chunk | time | output | items |
+|---|---|---|---|
+| uncapped | 138s | 2,400 tokens | 55 (or 0, truncated) |
+| `AT MOST 8 items` | **28s** | 398 tokens | 8 |
+
+A five-chunk recording still offers 40 candidates for 3 places and selection sees all of
+them at once, so this is not a recall cut — it is declining to pay for candidates that
+exist only to be discarded. Extrapolated over this archive's 361 chunk-calls, an
+extraction pass goes from about 14 hours to under 3.
+
+**What did not help, measured.** Running the calls concurrently is the obvious next move
+and does nothing locally: generation is memory-bandwidth bound, not latency bound. One
+stream of an 8B at Q4 reads 5.2 GB of weights thirty times a second — 156 GB/s of an M4
+Pro's 273 GB/s — so a second stream has nowhere to run. On a real transcript with the
+model warm: 65.8s serial, 66.9s with two workers. `llm_workers` therefore defaults to 1,
+and rises only for a hosted `cloud_model`, where the wait is network latency against a
+provider running its own parallelism.
+
+**Worth setting on the machine**, none of which this project can set for you:
+
+```bash
+export OLLAMA_FLASH_ATTENTION=1   # faster attention, smaller KV cache
+export OLLAMA_KEEP_ALIVE=30m      # default 5m — stages reload the model between them
+```
+
+And check which model you are actually on. `qwen3:latest` answers a classification in
+4.4s here; `qwen3.5:latest` takes **88s** for the same prompt. The second is the
+shipped default in `config.py`, so a fresh install is twenty times slower until you
+change it.
+
 ## Using a bigger model, on demand
 
 Everything defaults to local. Two steps can be pointed at a large model when you want

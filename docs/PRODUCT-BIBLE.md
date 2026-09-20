@@ -901,6 +901,53 @@ averaging several conversations, 18 titles naming one of them, and hits that cit
 file rather than the conversation. None of that is wrong today; all of it is coarse, and
 it is the next piece of work rather than a defect in this one.
 
+### D38 — The cost of a call is the length of what it writes
+A full pass took hours and the instinct was to reach for a bigger machine. Profiling
+said otherwise. On this hardware prompt processing is nearly free — 5,634 prompt tokens
+cost under a second — and generation runs at about **30 tokens a second**, so the runtime
+of every stage is the length of its output and nothing else.
+
+Extraction was asked for an unlimited list. On one 12,000-character chunk it returned
+**55 candidates and spent 2,400 output tokens**, for a conversation whose budget is 3.
+Capped at 8 per chunk, the same chunk took **28s instead of 138s**. A five-chunk
+recording still offers 40 candidates for 3 places and selection sees all of them at
+once, so this is not a recall cut — it is declining to pay for candidates that exist
+only to be discarded. **The performance fix and the precision fix are the same line.**
+
+Capping output surfaced a silent loss created hours earlier by `llm_max_tokens`: a reply
+cut mid-array parsed to `[]`, which is indistinguishable from "this passage held
+nothing" — a real and common answer. A chunk holding 55 items reported a quiet zero.
+Truncated arrays are salvaged element by element now. **A ceiling on output is only safe
+beside a parser that can tell truncation from emptiness.**
+
+`num_ctx` went 8192 → 16384 for a related reason: an extraction prompt is ~5,600 tokens
+and the output ceiling allows 4,096, so the two together overflowed the window and the
+model paid for context shifting mid-call — 179s against 273s on identical work.
+
+### D39 — Concurrency is for latency, and local generation is not latency-bound
+`map_prompts()` runs a stage's per-chunk calls concurrently with order preserved,
+failures isolated to their own slot, and `RemoteNotPermitted` propagating rather than
+becoming a missing result — a tier refusal swallowed per chunk would let a caller
+summarise what survived as though the archive had nothing more to say.
+
+**It makes this machine no faster, and the default says so.** Local generation is
+memory-bandwidth bound: one stream of an 8B at Q4 reads 5.2 GB of weights thirty times a
+second, which is 156 GB/s of an M4 Pro's 273 GB/s, so a second stream has nowhere to
+run. Measured on a real five-chunk transcript with the model warm: **65.8s serial, 66.9s
+with two workers.** An early reading of 4.4x was the first call paying for model load,
+and re-running with a warm model in reversed order is what caught it.
+
+So `llm_workers` defaults to 1, and `with_cloud()` raises it — a hosted call waits on the
+network against a provider running its own parallelism, which is the case this was built
+for. The code is kept rather than reverted because the machine it helps is the one being
+considered: an M4 Max is ~410 GB/s and an Ultra ~819, where a second stream does have
+room.
+
+**Tone scoring reads a sample** — up to eight stretches, ends always included, positions
+recorded so a reading can still say where it looked. Honest size: 350 calls to 316 across
+this archive, because most recordings are under eight chunks. What it really does is cap
+the pathological case, where a five-hour pin spent forty calls to move one number.
+
 ### D14 — qwen3:8b, not the largest model available
 `qwen3.8` (27.3B, Q4_K_M, 17.7 GB) was pulled and **cannot load** on a 24 GB machine:
 5m04s of thrashing, swap climbing, then `timed out waiting for llama-server to start`,
