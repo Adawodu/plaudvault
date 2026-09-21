@@ -1111,7 +1111,8 @@ def cmd_prune(args, cfg) -> int:
         if args.probe:
             return 0 if prune.probe(cfg, client, store, confirm=args.yes) else 1
         s = prune.run(cfg, client, store, confirm=args.yes, limit=args.limit)
-    print(f"\n  pruned {s['pruned']}, skipped {s['skipped']}, failed {s['failed']}")
+    print(f"\n  pruned {s['pruned']}, skipped {s['skipped']}, failed {s['failed']}"
+          + (f", {s['already_gone']} already gone" if s.get("already_gone") else ""))
     return 1 if s["failed"] else 0
 
 

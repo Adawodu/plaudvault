@@ -118,7 +118,7 @@ def probe(cfg: Config, client: PlaudClient, store: Store, *, confirm: bool) -> b
 
 
 def run(cfg: Config, client: PlaudClient, store: Store, *, confirm: bool, limit: int | None) -> dict:
-    stats = {"pruned": 0, "skipped": 0, "failed": 0}
+    stats = {"pruned": 0, "skipped": 0, "failed": 0, "already_gone": 0}
 
     if not receipt_path(cfg).exists():
         print("  BLOCKED: no probe receipt.")
@@ -127,17 +127,43 @@ def run(cfg: Config, client: PlaudClient, store: Store, *, confirm: bool, limit:
         return stats
 
     rows = store.prunable(cfg.prune_min_age_days, require_note=cfg.notes_dir is not None)
+
+    # What the cloud still holds, asked once. Deleting in Plaud's own app is a
+    # legitimate workflow (D16) and a long-standing archive drifts a long way from the
+    # account behind it — here, 54 of 72 eligible recordings were already gone. Without
+    # this they are 54 doomed API calls reported as 54 failures, which buries the
+    # handful that actually mattered and makes a working prune look broken.
+    try:
+        in_cloud = {r.id for r in client.recordings()}
+    except Exception as exc:  # noqa: BLE001
+        # Not fatal: without the listing every recording is simply attempted, which is
+        # the old behaviour. Saying so beats guessing that silence meant an empty cloud
+        # and trashing nothing.
+        print(f"  [warn] could not list the cloud ({exc}) — will attempt each one")
+        in_cloud = None
+
     eligible = []
     for row in rows:
         if not _marked(store, row["id"]):
             stats["skipped"] += 1
             continue  # not marked in the console — silently left alone, as intended
         ok, reason = _eligible(cfg, row)
-        if ok:
-            eligible.append(row)
-        else:
+        if not ok:
             stats["skipped"] += 1
             print(f"  [skip] {row['filename'][:50]}: {reason}")
+            continue
+        if in_cloud is not None and row["id"] not in in_cloud:
+            # Already off their servers. That is the outcome pruning is for, so it is
+            # recorded as reached rather than as an error — and `pruned_at` is stamped
+            # so it stops being offered every time.
+            store.update(row["id"], pruned_at=int(time.time()))
+            stats["already_gone"] += 1
+            continue
+        eligible.append(row)
+
+    if stats["already_gone"]:
+        print(f"  {stats['already_gone']} already gone from the cloud — "
+              f"deleted in Plaud's app, nothing to do")
 
     if not eligible:
         print("  nothing marked for deletion in the console.")
