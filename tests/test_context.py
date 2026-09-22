@@ -173,3 +173,49 @@ def test_a_chunk_with_no_timestamp_does_not_lose_its_window(tmp_path):
     st.db.execute("UPDATE chunks SET start_ms = NULL WHERE idx = 1")
     st.db.commit()
     assert len(st.chunk_window("r1", 1, model="m", before=1, after=1)) == 3
+
+
+# ------------------------------- a hit has to say which conversation it is in
+
+def test_a_hit_names_the_conversation_it_came_from(tmp_path):
+    """"recording 007a2ff6 @ 01:45:05" does not tell a reader whether they are looking
+    at a standup or a podcast that happened to be playing. A five-hour file holds
+    both."""
+    st = _seed(tmp_path / "m.sqlite", ["alpha", "bravo", "charlie", "delta"])
+    st.db.execute("UPDATE recordings SET duration_s = 600 WHERE id = 'r1'")
+    st.db.commit()
+    st.set_segments("r1", [{"start_ms": 0, "end_ms": 120_000},
+                           {"start_ms": 120_000, "end_ms": 600_000}])
+    st.set_kind("r1", segment_idx=0, kind="working", source="model")
+    st.set_kind("r1", segment_idx=1, kind="media", source="model")
+
+    hits = [{"recording_id": "r1", "start_ms": 0},
+            {"recording_id": "r1", "start_ms": 180_000}]
+    got = search.annotate_conversation(st, hits)
+    assert (got[0]["segment_idx"], got[0]["kind"]) == (0, "working")
+    assert (got[1]["segment_idx"], got[1]["kind"]) == (1, "media")
+
+
+def test_an_unsegmented_recording_annotates_as_its_only_conversation(tmp_path):
+    st = _seed(tmp_path / "m.sqlite", ["alpha"])
+    st.db.execute("UPDATE recordings SET duration_s = 600 WHERE id = 'r1'")
+    st.db.commit()
+    st.set_kind("r1", kind="personal", source="model")
+    got = search.annotate_conversation(st, [{"recording_id": "r1", "start_ms": 5000}])
+    assert got[0]["segment_idx"] == 0 and got[0]["kind"] == "personal"
+
+
+def test_an_unclassified_conversation_says_so_rather_than_guessing(tmp_path):
+    st = _seed(tmp_path / "m.sqlite", ["alpha"])
+    st.db.execute("UPDATE recordings SET duration_s = 600 WHERE id = 'r1'")
+    st.db.commit()
+    got = search.annotate_conversation(st, [{"recording_id": "r1", "start_ms": 0}])
+    assert got[0]["kind"] is None
+
+
+def test_a_hit_with_no_timestamp_is_left_on_the_first_conversation(tmp_path):
+    """Nothing to place it with. A guess would put a citation in a conversation it may
+    not belong to, which is worse than an honest default."""
+    st = _seed(tmp_path / "m.sqlite", ["alpha"])
+    got = search.annotate_conversation(st, [{"recording_id": "r1", "start_ms": None}])
+    assert got[0]["segment_idx"] == 0 and got[0]["kind"] is None

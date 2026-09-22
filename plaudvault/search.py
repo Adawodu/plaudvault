@@ -153,6 +153,32 @@ def embed(cfg: Config, texts: list[str], *, kind: str = "document", timeout: flo
     return arr / np.maximum(norms, 1e-9)
 
 
+def annotate_conversation(store: Store, hits: list[dict]) -> list[dict]:
+    """Say which conversation inside the recording each hit came from, and its kind.
+
+    A hit used to carry a recording and a timestamp, which was enough while a recording
+    was one conversation. It is not any more: a five-hour file holds a standup, a school
+    run and a podcast playing, and a consumer handed "recording 007a2ff6 @ 01:45:05" has
+    no way to know which of those it is reading — or that the third is not a
+    conversation anybody was part of.
+
+    Looked up per hit rather than joined in the ranking query, because the ranking is a
+    matrix multiply over every candidate chunk and this is two small reads over the
+    handful that survive it.
+    """
+    for h in hits:
+        h["segment_idx"], h["kind"] = 0, None
+        if h.get("start_ms") is None:
+            continue
+        for sg in store.segments(h["recording_id"]):
+            if sg["start_ms"] <= h["start_ms"] < sg["end_ms"]:
+                h["segment_idx"] = sg["idx"]
+                break
+        k = store.kind_of(h["recording_id"], h["segment_idx"])
+        h["kind"] = k["kind"] if k else None
+    return hits
+
+
 def _stitch(left: str, right: str) -> str:
     """Join two adjacent chunks, dropping the overlap they share.
 
@@ -323,7 +349,7 @@ def search(
     if context > 0:
         out = [expand(store, h, model=cfg.embed_model, before=context, after=context)
                for h in out]
-    return out
+    return annotate_conversation(store, out)
 
 
 def _hhmmss(ms: int | None) -> str:

@@ -811,8 +811,27 @@ def recording_story_svg(rec_id: str, fmt: str = "svg"):
 
 
 @app.get("/api/search")
-def semantic_search(q: str = "", k: int = Query(20, ge=1, le=100), excluded: bool = False):
+def semantic_search(q: str = "", k: int = Query(20, ge=1, le=100), excluded: bool = False,
+                    tiers: str = "", context: int = Query(0, ge=0, le=3)):
+    """Semantic search, with the two things a consumer outside this console needs.
+
+    `tiers` ("stack", or "stack,local") narrows **before** ranking. A caller that can
+    only use one tier was otherwise over-fetching and dropping the rest on its own
+    side, which is the post-filter D26 rejects: it returns two hits when six were
+    asked for, and cannot tell "nothing matched" from "the matches were filtered out".
+    The tier is the one thing this archive must not leave to a caller's diligence, so
+    it is expressible here.
+
+    `context` attaches the neighbouring chunks of each hit, clamped to the hit's own
+    conversation. A 1200-character chunk points at a findable moment; an agent
+    answering from one wants the sentences either side.
+
+    Every hit also says which conversation inside the recording it came from and what
+    kind that conversation is, because "recording 007a2ff6 @ 01:45:05" does not tell a
+    reader whether they are looking at a standup or a podcast that was playing.
+    """
     cfg = _cfg()
+    wanted = {t.strip() for t in tiers.split(",") if t.strip()} or None
     with _store(cfg) as store:
         stats = store.index_stats(cfg.embed_model)
         ok, why = search.available(cfg)
@@ -820,8 +839,10 @@ def semantic_search(q: str = "", k: int = Query(20, ge=1, le=100), excluded: boo
             return {"query": "", "hits": [], "index": stats, "ready": ok, "detail": why}
         if not ok:
             raise HTTPException(503, f"embedding model unavailable — {why}")
-        hits = search.search(cfg, store, q, k=k, include_excluded=excluded)
-        return {"query": q, "hits": hits, "index": stats, "ready": True, "detail": "ok"}
+        hits = search.search(cfg, store, q, k=k, include_excluded=excluded,
+                             tiers=wanted, context=context)
+        return {"query": q, "hits": hits, "index": stats, "ready": True, "detail": "ok",
+                "tiers": sorted(wanted) if wanted else "all"}
 
 
 # ----------------------------------------------------------------------- freshness
